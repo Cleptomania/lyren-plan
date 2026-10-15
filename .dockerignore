@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+.git
+coverage
+test-results
+playwright-report
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+docs
+.cache

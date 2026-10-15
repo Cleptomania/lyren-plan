@@ -1,0 +1,479 @@
+@import 'tailwindcss';
+
+/* Dark mode is class-based: <html class="dark"> (see theme-init.ts / lib/theme.ts). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Semantic design tokens. ALWAYS use these utilities instead of raw palette
+ * colors for surfaces/text/borders so both themes work:
+ *   bg-bg (app background), bg-surface (cards, panels), bg-surface-2 (hover / subtle fill),
+ *   bg-surface-3 (pressed / stronger fill), bg-popover (menus, popovers, sheets, dialogs),
+ *   border-border, border-border-strong (decorative separators and outlines),
+ *   border-border-control (boundary of form controls: ≥ 3:1 on every surface, WCAG 1.4.11),
+ *   text-fg, text-fg-muted, text-fg-subtle, bg-accent / text-accent / bg-accent-soft,
+ *   text-accent-fg (text on accent), text-danger / bg-danger / bg-danger-soft,
+ *   text-danger-fg (text on bg-danger), text-warning / bg-warning-soft,
+ *   text-success / bg-success-soft, bg-overlay (modal scrim), ring-focus (focus rings).
+ * Text tokens meet WCAG AA (4.5:1) on bg / surface / surface-2 / surface-3 / popover in both
+ * themes, and text-danger / text-success / text-warning also on their *-soft fills.
+ * Entity colors (projects, tags, statuses, epics) are user data: apply them with
+ * inline style (e.g. style={{ backgroundColor: color }}) via the helpers in lib/colors.ts.
+ *
+ * App-shell layout variables (set by components/layout/AppShell; 0px outside it):
+ *   --bottom-bar-h  height of the mobile tab bar incl. safe area
+ *   --offline-h     height of the offline banner while offline
+ *   --fab-space     room to leave at the end of scrollers so the mobile "+" button covers nothing
+ */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-popover: var(--popover);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-control: var(--border-control);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-fg: var(--danger-fg);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-overlay: var(--overlay);
+  --color-focus: var(--focus);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans',
+    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+
+  --shadow-card: var(--shadow-card-v);
+  --shadow-pop: var(--shadow-pop-v);
+  --shadow-drag: var(--shadow-drag-v);
+}
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --surface-3: #e6e9ef;
+  --popover: #ffffff;
+  --border: #e3e6eb;
+  --border-strong: #cdd2da;
+  --border-control: #878d99;
+  --fg: #16181d;
+  --fg-muted: #4b5260;
+  --fg-subtle: #626876;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-fg: #ffffff;
+  --accent-soft: #eef0ff;
+  --danger: #c81e1e;
+  --danger-hover: #a51a1a;
+  --danger-fg: #ffffff;
+  --danger-soft: #fdecec;
+  --warning: #b45309;
+  --warning-soft: #fdf3e2;
+  --success: #14773a;
+  --success-soft: #e8f6ed;
+  --overlay: rgb(15 17 23 / 0.4);
+  --focus: #6366f1;
+  --shadow-card-v: 0 1px 2px rgb(16 24 40 / 0.05), 0 1px 1px rgb(16 24 40 / 0.03);
+  --shadow-pop-v: 0 12px 32px -12px rgb(16 24 40 / 0.22), 0 4px 10px -4px rgb(16 24 40 / 0.1);
+  --shadow-drag-v: 0 18px 40px -12px rgb(16 24 40 / 0.35);
+
+  --bottom-bar-h: 0px;
+  --offline-h: 0px;
+  --fab-space: 0px;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0b0d12;
+  --surface: #13161d;
+  --surface-2: #1a1e27;
+  --surface-3: #232835;
+  --popover: #181b23;
+  --border: #252a35;
+  --border-strong: #353c4b;
+  --border-control: #626a7a;
+  --fg: #e8eaef;
+  --fg-muted: #a1a8b5;
+  --fg-subtle: #8a91a0;
+  --accent: #818cf8;
+  --accent-hover: #a5b4fc;
+  --accent-fg: #0b0d12;
+  --accent-soft: #1e2140;
+  --danger: #f87171;
+  --danger-hover: #fca5a5;
+  --danger-fg: #1a0a0a;
+  --danger-soft: #3a1717;
+  --warning: #fbbf24;
+  --warning-soft: #352a10;
+  --success: #4ade80;
+  --success-soft: #12301f;
+  --overlay: rgb(0 0 0 / 0.6);
+  --focus: #818cf8;
+  --shadow-card-v: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop-v: 0 16px 40px -12px rgb(0 0 0 / 0.7), 0 4px 12px -4px rgb(0 0 0 / 0.5);
+  --shadow-drag-v: 0 18px 40px -12px rgb(0 0 0 / 0.8);
+  color-scheme: dark;
+}
+
+/* Mobile app shell: bottom tab bar (+ floating "+" button). */
+@media (max-width: 767px) {
+  :root.has-app-shell {
+    --bottom-bar-h: calc(3.5rem + env(safe-area-inset-bottom));
+    --fab-space: 5rem;
+  }
+}
+:root.is-offline {
+  --offline-h: 1.75rem;
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  /* Avoid iOS zoom-on-focus: form controls must be >= 16px on small screens. Utilities such as
+     `text-sm` beat this base layer, so the small text-size tokens they read are raised to 16px
+     on the controls themselves too (larger sizes, e.g. title inputs, are left alone). Touch
+     devices get it at every width: iOS also zooms in landscape and on tablets. */
+  @media (max-width: 767px), (pointer: coarse) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+      --text-xs: 1rem;
+      --text-sm: 1rem;
+    }
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  /* iOS renders empty native date inputs with zero height and centered text. */
+  input[type='date'] {
+    min-height: 1.5em;
+  }
+  input[type='date']::-webkit-date-and-time-value {
+    text-align: left;
+  }
+}
+
+@layer utilities {
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .touch-scroll-x {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Horizontal scroller hinting at hidden content: the data attributes are set by script
+     (Tabs' useEdgeFade) while content is scrolled out of view past that edge. */
+  .edge-fade[data-fade-end] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
+  }
+  .edge-fade[data-fade-start] {
+    mask-image: linear-gradient(to left, #000 calc(100% - 1.5rem), transparent);
+  }
+  .edge-fade[data-fade-start][data-fade-end] {
+    mask-image: linear-gradient(to right, transparent, #000 1.5rem, #000 calc(100% - 1.5rem), transparent);
+  }
+}
+
+/* Safe-area padding with a minimum (variant-friendly, e.g. md:pb-safe-3). */
+@utility pb-safe-3 {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+@utility pt-safe-3 {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+/* Height of the visible app area below/above the shell chrome (full-bleed board pages). */
+@utility h-app-screen {
+  height: calc(100dvh - var(--bottom-bar-h) - var(--offline-h));
+}
+/* Bottom padding for document-scrolling pages: clears the tab bar, offline banner and "+" button. */
+@utility pb-app-chrome {
+  padding-bottom: calc(var(--bottom-bar-h) + var(--offline-h) + var(--fab-space));
+}
+/* Bottom padding for full-bleed pages: clears only the tab bar and offline banner. */
+@utility pb-app-bars {
+  padding-bottom: calc(var(--bottom-bar-h) + var(--offline-h));
+}
+
+/* Toasts sit above the mobile tab bar / offline banner (components/ui/Toast.tsx), and above a
+   sticky selection bar while one is mounted (--selection-bar-h, features/tasks/BulkActionBar).
+   While an overlay panel is open the Toaster may move them (inline style, toastPlacement.ts). */
+.toast-region {
+  bottom: calc(max(var(--bottom-bar-h), env(safe-area-inset-bottom)) + var(--offline-h) + 0.75rem + var(--selection-bar-h, 0px));
+}
+@media (min-width: 768px) {
+  .toast-region {
+    bottom: calc(var(--offline-h) + 1rem + var(--selection-bar-h, 0px));
+  }
+}
+/* The Toaster's measuring probe: its top is the highest the stack may go (below the notch). */
+.toast-probe {
+  top: calc(env(safe-area-inset-top) + 0.75rem);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Mobile "+" button: above the tab bar and the offline banner (components/layout/MobileNav.tsx). */
+.fab-position {
+  bottom: calc(var(--bottom-bar-h) + var(--offline-h) + 1rem);
+}
+
+/*
+ * Overlay transitions (components/ui). `data-status` comes from floating-ui's
+ * useTransitionStatus: 'initial' (just mounted) → 'open' → 'close' (exiting).
+ */
+.ui-fade {
+  transition: opacity 150ms ease-out;
+}
+.ui-pop {
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
+}
+.ui-dialog {
+  transition:
+    opacity 160ms ease-out,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ui-sheet,
+.ui-slide-right,
+.ui-slide-left {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ui-toast {
+  transition:
+    opacity 160ms ease-out,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:is(.ui-fade, .ui-pop, .ui-dialog, .ui-toast):is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  opacity: 0;
+}
+.ui-pop:is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  transform: scale(0.97);
+}
+.ui-dialog:is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  transform: translateY(8px) scale(0.985);
+}
+.ui-sheet:is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  transform: translateY(100%);
+}
+.ui-slide-right:is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  transform: translateX(100%);
+}
+.ui-slide-left:is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  transform: translateX(-100%);
+}
+.ui-toast:is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  transform: translateY(8px);
+}
+/* Toasts moved to the top edge (an open full-screen panel) slide in from above. */
+.toast-region[data-placement='top'] .ui-toast:is([data-status='unmounted'], [data-status='initial'], [data-status='close']) {
+  transform: translateY(-8px);
+}
+[data-status='close'] {
+  pointer-events: none;
+}
+/*
+ * Ghost-tap guard (TAP_GUARD_MS in components/ui/internal/useModal.ts): a modal panel ignores
+ * pointer input for its first moments, so the second tap of a quick double tap on the action
+ * that opened it falls on the scrim (which ignores it too) instead of a control in the panel.
+ * Not motion: it applies with reduced motion as well. Desktop drawers (.ui-slide-*) are
+ * non-modal, where a tap would fall through to the page instead, so they are left out.
+ */
+:is(.ui-dialog, .ui-sheet):not([data-status='close']) {
+  animation: tap-guard 350ms;
+}
+@keyframes tap-guard {
+  from,
+  to {
+    pointer-events: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-fade,
+  .ui-pop,
+  .ui-dialog,
+  .ui-sheet,
+  .ui-slide-right,
+  .ui-slide-left,
+  .ui-toast {
+    transition-duration: 1ms;
+  }
+}
+
+/* Rendered markdown (components/ui/Markdown.tsx). */
+.markdown {
+  overflow-wrap: anywhere;
+}
+.markdown > * + * {
+  margin-top: 0.6em;
+}
+.markdown h1 {
+  font-size: 1.35em;
+  font-weight: 650;
+}
+.markdown h2 {
+  font-size: 1.2em;
+  font-weight: 650;
+}
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 1.05em;
+  font-weight: 650;
+}
+.markdown :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.35em;
+}
+.markdown * + :is(h1, h2, h3) {
+  margin-top: 1em;
+}
+.markdown ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.markdown ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.markdown li + li {
+  margin-top: 0.2em;
+}
+.markdown li > ul,
+.markdown li > ol {
+  margin-top: 0.2em;
+}
+.markdown ul.contains-task-list {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.markdown li.task-list-item > ul.contains-task-list {
+  padding-left: 1.4em;
+}
+.markdown input[type='checkbox'] {
+  margin: 0 0.45em 0.15em 0;
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
+.markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+}
+.markdown pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+}
+.markdown pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.markdown blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 0.8em;
+  color: var(--fg-muted);
+}
+.markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+}
+.markdown th {
+  background: var(--surface-2);
+  font-weight: 600;
+  text-align: left;
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.markdown img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.markdown del {
+  color: var(--fg-muted);
+}

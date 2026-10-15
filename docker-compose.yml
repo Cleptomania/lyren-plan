@@ -1,0 +1,29 @@
+# docker compose up -d   →   http://localhost:8080
+# First run: `docker compose logs lyren` shows the one-time setup code.
+services:
+  lyren:
+    build: .
+    image: lyren-plan:latest
+    container_name: lyren-plan
+    restart: unless-stopped
+    ports:
+      # Behind a reverse proxy, publish on localhost only so clients can't bypass it:
+      #   - "127.0.0.1:8080:8080"
+      - "8080:8080"
+    volumes:
+      # Named volume (permissions handled automatically). For a bind mount use e.g.
+      # ./data:/data after `mkdir data && sudo chown 1000:1000 data`.
+      - lyren-data:/data
+    environment:
+      # Set to "true" when running behind a TLS-terminating reverse proxy (Caddy, nginx, Traefik).
+      TRUST_PROXY: "false"
+      # auto = Secure cookies when the request is HTTPS.
+      COOKIE_SECURE: "auto"
+      # Optional fixed first-run setup code (otherwise a random one is printed to the log).
+      # SETUP_TOKEN: "choose-something"
+      # Automatic pre-import / pre-upgrade snapshots of each kind kept in /data/backups
+      # (default 10; 0 keeps all). Your own backups there are never deleted.
+      # SNAPSHOT_KEEP: "10"
+
+volumes:
+  lyren-data:

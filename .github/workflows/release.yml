@@ -1,0 +1,181 @@
+# Builds, tests and publishes Lyren Plan's single-file apps (scripts/package.mjs) as a GitHub
+# Release. See README.md, "Releases".
+#
+#   Push of a tag v<version>   build and test on Linux, smoke-test the Windows exe on Windows, then
+#                              publish the release "Lyren Plan <version>": both binaries, their
+#                              .sha256 files and SHA256SUMS. The tag must be v + the version in
+#                              package.json.
+#   Actions -> Run workflow    the same build and smoke test as a dry run: nothing is published; the
+#                              binaries are kept as an artifact of the run (3 days; 7 for a tag) and
+#                              the summary shows the release notes.
+#
+# Security: the token can only read, except in the job that publishes; only GitHub's own actions,
+# each pinned to the commit of a release at least two weeks old (the version in the comment); no
+# caches; text that someone else chooses (such as the tag name) reaches scripts through environment
+# variables, never through ${{ }} in a script. Signing the exe is not part of it (README, "Signing
+# the app").
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      # scripts/package.mjs: refuse a Node.js version whose binaries are not pinned in
+      # scripts/lib/node-hashes.mjs instead of checking them against downloaded checksums.
+      LYREN_NODE_PINNED_ONLY: '1'
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (the exact version in .nvmrc)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Check the version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::The version in package.json, $version, is not <major>.<minor>.<patch> or <major>.<minor>.<patch>-<prerelease>."
+            exit 1
+          fi
+          if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "v$version" ]]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the version in package.json, $version. Tag the commit as v$version, or set the version and tag again."
+            exit 1
+          fi
+          echo "Lyren Plan $version, Node.js $(node --version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Typecheck, test and build
+        run: npm run check
+
+      # --no-build: package the dist/ that npm run check has just built.
+      - name: Package the Windows app
+        run: node scripts/package.mjs --target win-x64 --no-build
+
+      # The manifest test that needs the official node.exe, skipped by npm run check above because
+      # only packaging downloads it (to .cache/node/). The variable makes it run, not skip.
+      - name: Test the manifest change on the official node.exe
+        env:
+          LYREN_TEST_REQUIRE_CACHED_NODE: '1'
+        run: npx vitest run scripts/test/manifest.test.mjs
+
+      - name: Package the Linux app
+        run: node scripts/package.mjs --target linux-x64 --no-build
+
+      - name: Keep the binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lyren-plan-${{ steps.version.outputs.version }}
+          path: |
+            dist/lyren-plan-${{ steps.version.outputs.version }}-win-x64.exe
+            dist/lyren-plan-${{ steps.version.outputs.version }}-win-x64.exe.sha256
+            dist/lyren-plan-${{ steps.version.outputs.version }}-linux-x64
+            dist/lyren-plan-${{ steps.version.outputs.version }}-linux-x64.sha256
+          if-no-files-found: error
+          # A tag push: long enough to re-run a failed smoke test or release job. A dry run: long
+          # enough to try the binaries, without keeping about 75 MB per run for a week.
+          retention-days: ${{ github.event_name == 'push' && 7 || 3 }}
+
+  smoke-windows:
+    name: Smoke test on Windows
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Check out (for the smoke test script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lyren-plan-${{ needs.build.outputs.version }}
+          path: dist
+
+      # The same script in both PowerShells, as people run it by hand. Each run gets a new folder
+      # and port; the script checks the exe against its .sha256 file first.
+      - name: Smoke test (PowerShell 7)
+        shell: pwsh
+        run: ./scripts/ci/smoke-windows.ps1 -Exe "dist\lyren-plan-$($env:VERSION)-win-x64.exe" -WorkDir "$env:RUNNER_TEMP\smoke-pwsh" -Port 43871
+
+      - name: Smoke test (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./scripts/ci/smoke-windows.ps1 -Exe "dist\lyren-plan-$($env:VERSION)-win-x64.exe" -WorkDir "$env:RUNNER_TEMP\smoke-powershell" -Port 43872
+
+  release:
+    name: Publish the release
+    needs: [build, smoke-windows]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out (for the release script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lyren-plan-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: Publish
+        run: bash scripts/ci/publish-release.sh "$GITHUB_REF_NAME" "$VERSION" release
+
+  release-dry-run:
+    name: Release notes (dry run)
+    needs: [build, smoke-windows]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Check out (for the release script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lyren-plan-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: Show the release notes
+        run: bash scripts/ci/publish-release.sh --dry-run "v$VERSION" "$VERSION" release

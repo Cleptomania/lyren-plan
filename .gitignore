@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+*.db
+*.db-wal
+*.db-shm
+coverage/
+test-results/
+playwright-report/
+.env
+.DS_Store
+.cache/
