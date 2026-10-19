@@ -9,6 +9,7 @@ import { Link, useNavigate } from 'react-router';
 import type { TaskDTO } from '@shared/types';
 import { ApiError } from '../../api/client';
 import { useTask } from '../../api/tasks';
+import { useSpaceId } from '../../app/space';
 import { TaskActionsMenu } from '../../components/domain';
 import {
   Button,
@@ -132,14 +133,15 @@ interface DrawerHeaderProps {
 }
 
 function DrawerHeader({ task, loading, isMobile, onClose }: DrawerHeaderProps) {
+  const sid = useSpaceId();
   const navigate = useNavigate();
   // Navigating drops ?task=, which closes the drawer (no explicit close: that would pop history).
   const extra = useMemo<MenuItem[] | undefined>(
     () =>
       task
-        ? detailMenuItems(task, [{ label: 'Open full page', icon: <Maximize2 />, onSelect: () => navigate(taskPageUrl(task)) }])
+        ? detailMenuItems(sid, task, [{ label: 'Open full page', icon: <Maximize2 />, onSelect: () => navigate(taskPageUrl(sid, task)) }])
         : undefined,
-    [task, navigate],
+    [sid, task, navigate],
   );
 
   return (
@@ -147,7 +149,7 @@ function DrawerHeader({ task, loading, isMobile, onClose }: DrawerHeaderProps) {
       {isMobile && <IconButton aria-label="Close task" tooltip={false} icon={<ArrowLeft />} onClick={onClose} />}
       {task ? (
         <Tooltip content="Copy link">
-          <Button size="sm" variant="ghost" icon={<Link2 />} onClick={() => copyTaskLink(task)} aria-label={`Copy link to ${task.ref}`} className="tabular-nums">
+          <Button size="sm" variant="ghost" icon={<Link2 />} onClick={() => copyTaskLink(sid, task)} aria-label={`Copy link to ${task.ref}`} className="tabular-nums">
             {task.ref}
           </Button>
         </Tooltip>
@@ -158,7 +160,7 @@ function DrawerHeader({ task, loading, isMobile, onClose }: DrawerHeaderProps) {
       <div className="ml-auto flex items-center gap-0.5">
         {task && !isMobile && (
           <Tooltip content="Open full page">
-            <Link to={taskPageUrl(task)} aria-label="Open full page" className={iconButtonClasses({ className: '[&_svg]:size-4' })}>
+            <Link to={taskPageUrl(sid, task)} aria-label="Open full page" className={iconButtonClasses({ className: '[&_svg]:size-4' })}>
               <Maximize2 aria-hidden />
             </Link>
           </Tooltip>

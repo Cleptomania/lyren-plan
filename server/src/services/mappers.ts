@@ -7,6 +7,7 @@ import type {
   CommentDTO,
   EpicDTO,
   MilestoneDTO,
+  PersonDTO,
   ProgressStats,
   ProjectDTO,
   ProjectStats,
@@ -22,19 +23,20 @@ import type {
   CommentRow,
   EpicRow,
   MilestoneRow,
+  MirrorUserRow,
   ProjectRow,
   StatusRow,
   TagRow,
   WorklogRow,
 } from './rows';
 
-/** SELECT for comments with the author's display name (alias `c`). Append WHERE/ORDER BY. */
-export const COMMENT_SELECT =
-  'SELECT c.*, u.display_name AS author_name FROM comments c LEFT JOIN users u ON u.id = c.user_id';
+/** SELECT for comments with the author's and importer's display names (alias `c`). Append WHERE/ORDER BY. */
+export const COMMENT_SELECT = `SELECT c.*, u.display_name AS author_name, ib.display_name AS imported_by_name
+  FROM comments c LEFT JOIN users u ON u.id = c.user_id LEFT JOIN users ib ON ib.id = c.imported_by`;
 
-/** SELECT for work logs with the author's display name (alias `w`). Append WHERE/ORDER BY. */
-export const WORKLOG_SELECT =
-  'SELECT w.*, u.display_name AS author_name FROM work_logs w LEFT JOIN users u ON u.id = w.user_id';
+/** SELECT for work logs with the author's and importer's display names (alias `w`). Append WHERE/ORDER BY. */
+export const WORKLOG_SELECT = `SELECT w.*, u.display_name AS author_name, ib.display_name AS imported_by_name
+  FROM work_logs w LEFT JOIN users u ON u.id = w.user_id LEFT JOIN users ib ON ib.id = w.imported_by`;
 
 /** JSON.parse that never throws (returns `fallback` for malformed input). */
 export function parseJson(text: string | null | undefined, fallback: unknown = null): unknown {
@@ -147,6 +149,8 @@ export function toCommentDTO(row: CommentRow & AuthorJoin): CommentDTO {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     editedAt: row.edited_at,
+    importedBy: toUserRef(row.imported_by, row.imported_by_name),
+    importedAt: row.imported_at,
   };
 }
 
@@ -160,5 +164,17 @@ export function toWorklogDTO(row: WorklogRow & AuthorJoin): WorklogDTO {
     author: toUserRef(row.user_id, row.author_name),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    importedBy: toUserRef(row.imported_by, row.imported_by_name),
+    importedAt: row.imported_at,
+  };
+}
+
+export function toPersonDTO(row: MirrorUserRow): PersonDTO {
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    kind: row.kind,
+    isMember: row.is_member === 1,
+    deleted: row.deleted === 1,
   };
 }

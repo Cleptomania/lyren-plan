@@ -12,10 +12,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { CliExit, lockoutAdvice, resetPassword } from '../src/cli';
-import { openDb } from '../src/db';
-import { hashPassword } from '../src/auth/passwords';
 import { bannerLines, bannerNotices, commandLine, commandShell, howToRun, ps51ArgText, psArg, psQuote, shellArg, stopLines, type BannerInfo } from '../src/desktop/console';
-import { commandTargetOption } from '../src/routes/desktop';
+import { commandTargetOption } from '../src/runtime/node/desktop';
 import { folderCommand, FolderTooLongError, MAX_EXPLORER_PATH } from '../src/desktop/browser';
 import { desktopFiles, readStateOf } from '../src/desktop/files';
 import { dialogText, MAX_DIALOG_TEXT, reportProblem, showDialog, type DialogDeps } from '../src/desktop/dialog';
@@ -54,6 +52,7 @@ import { DIALOG_SCRIPT, TRAY_SCRIPT } from '../src/desktop/scripts';
 import { createRuntime, consoleRuntime, fitsMessageBox, type DesktopRuntime } from '../src/desktop/runtime';
 import { installShutdown, noBrowserReason, runningHint, unusableInstanceMessage, waitingMessage } from '../src/desktop/serve';
 import { MAX_RESTARTS, TrayHost, trayMenu, trayTooltip, type HelperProcess, type TrayOptions } from '../src/desktop/tray';
+import { directoryWithOwner, ownerPasswordHash } from './support/directoryFile';
 import { ROOT, tsxCommand, tsxEnv } from './tsxNode';
 
 const dirs: string[] = [];
@@ -891,6 +890,57 @@ describe('the log file (log.ts)', () => {
     expect(oldLogName('work.db.log')).toBe('work.db.1.log');
   });
 
+  it('link tokens (#t=…, §9.7) never reach the file; the console still shows the whole line', () => {
+    const dir = tmp('lyren-logtoken-');
+    const log = new LogFile({ now: () => at });
+    log.open(dir);
+    const token = 'a'.repeat(20) + 'B-_9'.repeat(5) + 'zzz';
+    const line = `Invitation link: http://192.168.1.20:43770/invite#t=${token} (copy it)\n`;
+    const realOut = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const capture = captureOutput(log, { echo: true });
+    try {
+      process.stdout.write(line);
+      process.stdout.write('Reset: /reset#t=short and /verify#t=Q1w2E3r4\n');
+    } finally {
+      capture.restore();
+    }
+    expect(realOut).toHaveBeenCalledWith(line, undefined, undefined);
+    realOut.mockRestore();
+    log.close();
+    const text = fs.readFileSync(path.join(dir, LOG_FILE_NAME), 'utf8');
+    expect(text).toBe(
+      `2026-10-15 09:05:07 Invitation link: http://192.168.1.20:43770/invite#t=${REDACTED} (copy it)\n` +
+        `2026-10-15 09:05:07 Reset: /reset#t=${REDACTED} and /verify#t=${REDACTED}\n`,
+    );
+    expect(text).not.toContain(token);
+  });
+
+  it('a link token printed in two pieces, or percent-encoded in a query string, never reaches the file either', () => {
+    const dir = tmp('lyren-logsplit-');
+    const log = new LogFile({ now: () => at });
+    log.open(dir);
+    const token = 'AbCdEfGhIjKlMnOpQrSt' + 'UvWxYz0123456789_-abcde';
+    log.write(`split: /invite#t=${token.slice(0, 20)}`);
+    log.write(`${token.slice(20)} (copy it)\n`);
+    log.write(`next: /login?next=%2Finvite%23t%3D${token}&x=1\n`);
+    log.write(`lower: %23T%3d${token}\n`);
+    // A secret split in two, and a last line without a line break (written at close).
+    log.redact('4da84ba059c4');
+    log.write('  Setup code: 4da84');
+    log.write('ba059c4\nlast: #t=');
+    log.write(token);
+    log.close();
+    const text = fs.readFileSync(path.join(dir, LOG_FILE_NAME), 'utf8');
+    expect(text).toBe(
+      `2026-10-15 09:05:07 split: /invite#t=${REDACTED} (copy it)\n` +
+        `2026-10-15 09:05:07 next: /login?next=%2Finvite%23t%3D${REDACTED}&x=1\n` +
+        `2026-10-15 09:05:07 lower: %23T%3d${REDACTED}\n` +
+        `2026-10-15 09:05:07   Setup code: ${REDACTED}\n` +
+        `2026-10-15 09:05:07 last: #t=${REDACTED}`,
+    );
+    expect(text).not.toContain(token.slice(20));
+  });
+
   it('captureOutput: everything printed goes to the log, stderr is kept for message boxes; echo for terminals', () => {
     const dir = tmp('lyren-logcap-');
     const log = new LogFile({ now: () => at });
@@ -1064,12 +1114,8 @@ describe('texts for each mode', () => {
     expect(fromEnv).not.toContain('--no-browser');
   });
 
-  it('reset-password lock-out advice: Windows names the icon and the window; Linux unchanged', () => {
-    expect(lockoutAdvice('desktop', 'win32')).toBe(
-      'If you were locked out by too many attempts, wait 15 minutes, or quit Lyren Plan (choose Quit Lyren Plan from its icon in the notification area, or close its window) and start it again.',
-    );
-    expect(lockoutAdvice('desktop', 'linux')).toBe('If you were locked out by too many attempts, wait 15 minutes, or close the Lyren Plan window and start Lyren Plan again.');
-    expect(lockoutAdvice('server', 'win32')).toBe('If you were locked out by too many attempts, wait 15 minutes or restart the server.');
+  it('reset-password lock-out advice: the command clears lock-outs itself, so nothing needs a restart (§9.6)', () => {
+    expect(lockoutAdvice()).toBe('Any lock-out from failed sign-ins has been cleared.');
   });
 });
 
@@ -1281,11 +1327,7 @@ describe('without a console: what is shown (runtime.ts)', () => {
 
   it('unattended reset-password: no random password nobody could read; nothing is changed (RCK-2)', async () => {
     const dir = tmp('lyren-unattended-pw-');
-    const db = openDb(path.join(dir, 'lyren.db'));
-    const t = new Date().toISOString();
-    const hash = await hashPassword('original-password');
-    db.run(`INSERT INTO users (username, display_name, password_hash, created_at, updated_at) VALUES ('owner', 'Owner', :hash, :t, :t)`, { hash, t });
-    db.close();
+    const hash = await directoryWithOwner(path.join(dir, 'lyren.db'));
     const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true }); // nothing piped
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -1306,12 +1348,7 @@ describe('without a console: what is shown (runtime.ts)', () => {
       if (tty) Object.defineProperty(process.stdin, 'isTTY', tty);
       else delete (process.stdin as { isTTY?: boolean }).isTTY;
     }
-    const after = openDb(path.join(dir, 'lyren.db'));
-    try {
-      expect(after.get<{ password_hash: string }>("SELECT password_hash FROM users WHERE username = 'owner'")!.password_hash).toBe(hash);
-    } finally {
-      after.close();
-    }
+    expect(ownerPasswordHash(path.join(dir, 'lyren.db'))).toBe(hash);
   });
 });
 
@@ -1587,10 +1624,32 @@ describe('stop, end to end from source (tsx server/src/sea.ts)', () => {
     return port;
   }
 
+  /**
+   * Starts a copy on a free port and waits until it serves. The port is free only when probed: another test
+   * file running alongside may take it before the copy listens, so a copy refused for that starts again on
+   * another one.
+   */
+  async function startCopy(env: NodeJS.ProcessEnv, args: string[] = []) {
+    for (let attempt = 1; ; attempt++) {
+      const port = await freePort();
+      const child = spawn(...tsxCommand('server/src/sea.ts', ['--port', String(port), ...args]), { cwd: ROOT, env });
+      let out = '';
+      child.stdout.on('data', (d) => (out += d));
+      child.stderr.on('data', (d) => (out += d));
+      const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+      let closed = false;
+      const close = new Promise<void>((resolve) => child.once('close', () => resolve()));
+      void close.then(() => (closed = true));
+      const deadline = Date.now() + 30_000;
+      while (!out.includes('Keep this window open') && !closed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+      if (closed && attempt < 3 && out.includes('is already in use')) continue;
+      return { port, child, exited, out: () => out };
+    }
+  }
+
   it('stops the running app gracefully (exit 0, WAL checkpointed); refuses without the secret; nothing running is exit 1', async () => {
     const dir = tmp('lyren-stop-');
     const dataDir = path.join(dir, 'data');
-    const port = await freePort();
     const env = tsxEnv({ ...process.env, DATA_DIR: dataDir, WEB_DIR: '', OPEN_BROWSER: 'false', DB_PATH: '', HOST: '' });
     const run = (args: string[], extra: Record<string, string> = {}) =>
       spawnSync(...tsxCommand('server/src/sea.ts', args), { cwd: ROOT, env: { ...env, ...extra }, encoding: 'utf8', timeout: 60_000 });
@@ -1599,15 +1658,9 @@ describe('stop, end to end from source (tsx server/src/sea.ts)', () => {
     expect(none.status).toBe(1);
     expect(none.stderr).toContain(`Lyren Plan is not running with the data folder ${dataDir}.`);
 
-    const child = spawn(...tsxCommand('server/src/sea.ts', ['--port', String(port)]), { cwd: ROOT, env });
-    let out = '';
-    child.stdout.on('data', (d) => (out += d));
-    child.stderr.on('data', (d) => (out += d));
-    const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+    const { port, child, exited, out } = await startCopy(env);
     try {
-      const deadline = Date.now() + 30_000;
-      while (!out.includes('Keep this window open') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-      expect(out).toContain(`http://127.0.0.1:${port}/`);
+      expect(out()).toContain(`http://127.0.0.1:${port}/`);
 
       // Without the secret (another user, any program): refused, still running.
       const stateFile = path.join(dataDir, 'desktop.json');
@@ -1628,7 +1681,7 @@ describe('stop, end to end from source (tsx server/src/sea.ts)', () => {
       expect(stopped.status, stopped.stderr).toBe(0);
       expect(stopped.stdout).toContain(`Lyren Plan (http://127.0.0.1:${port}/) has stopped.`);
       expect(await exited).toBe(0);
-      expect(out).toContain('Stopping Lyren Plan (stop command)...');
+      expect(out()).toContain('Stopping Lyren Plan (stop command)...');
       expect(fs.readdirSync(dataDir).sort()).toEqual(['desktop.json', 'lyren.db']);
     } finally {
       child.kill('SIGTERM');
@@ -1641,22 +1694,10 @@ describe('stop, end to end from source (tsx server/src/sea.ts)', () => {
     const env = tsxEnv({ ...process.env, DATA_DIR: dir, WEB_DIR: '', OPEN_BROWSER: 'false', DB_PATH: '', HOST: '' });
     const run = (args: string[]) => spawnSync(...tsxCommand('server/src/sea.ts', args), { cwd: ROOT, env, encoding: 'utf8', timeout: 60_000 });
     const copies = await Promise.all(
-      ['a.db', 'b.db'].map(async (db) => {
-        const port = await freePort();
-        const child = spawn(...tsxCommand('server/src/sea.ts', ['--port', String(port), '--db-path', path.join(dir, db)]), { cwd: ROOT, env });
-        let out = '';
-        child.stdout.on('data', (d) => (out += d));
-        child.stderr.on('data', (d) => (out += d));
-        const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
-        return { db, port, child, exited, out: () => out };
-      }),
+      ['a.db', 'b.db'].map(async (db) => ({ db, ...(await startCopy(env, ['--db-path', path.join(dir, db)])) })),
     );
     try {
-      for (const c of copies) {
-        const deadline = Date.now() + 30_000;
-        while (!c.out().includes('Keep this window open') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-        expect(c.out(), c.db).toContain(`http://127.0.0.1:${c.port}/`);
-      }
+      for (const c of copies) expect(c.out(), c.db).toContain(`http://127.0.0.1:${c.port}/`);
       expect(fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()).toEqual(['a.db.desktop.json', 'b.db.desktop.json']);
       const [a, b] = copies as [(typeof copies)[0], (typeof copies)[0]];
       const stopA = run(['stop', '--db-path', path.join(dir, 'a.db')]);

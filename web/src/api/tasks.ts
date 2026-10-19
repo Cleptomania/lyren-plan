@@ -16,7 +16,8 @@ import type {
   TaskUpdateInput,
 } from '@shared/schemas';
 import type { BootstrapDTO, TaskDTO, TaskQueryResult } from '@shared/types';
-import { http } from './client';
+import { useSpaceId } from '../app/space';
+import { spaceApi } from './client';
 import { invalidateTasks, qk } from './keys';
 
 // ---- Queries -----------------------------------------------------------------
@@ -26,32 +27,35 @@ import { invalidateTasks, qk } from './keys';
  * Pass `today` (localToday()) and weekStartsOn when the filter uses due presets.
  */
 export function useTaskQuery(input: TaskQueryInput, opts: { enabled?: boolean } = {}) {
+  const sid = useSpaceId();
   return useQuery({
-    queryKey: qk.taskQuery(input),
-    queryFn: () => http.post<TaskQueryResult>('/tasks/query', input),
+    queryKey: qk.taskQuery(sid, input),
+    queryFn: () => spaceApi(sid).post<TaskQueryResult>('/tasks/query', input),
     placeholderData: keepPreviousData,
     enabled: opts.enabled ?? true,
   });
 }
 
 /** Query options of one task (GET /tasks/:id), shared by useTask and batch lookups (useQueries). */
-export function taskDetailQuery(id: number) {
-  return { queryKey: qk.task(id), queryFn: () => http.get<TaskDTO>(`/tasks/${id}`) };
+export function taskDetailQuery(spaceId: string, id: number) {
+  return { queryKey: qk.task(spaceId, id), queryFn: () => spaceApi(spaceId).get<TaskDTO>(`/tasks/${id}`) };
 }
 
 /** `enabled: false` keeps returning cached data without fetching (e.g. a drawer that is closing). */
 export function useTask(id: number | null | undefined, opts: { enabled?: boolean } = {}) {
+  const sid = useSpaceId();
   return useQuery({
-    ...taskDetailQuery(id ?? 0),
+    ...taskDetailQuery(sid, id ?? 0),
     enabled: typeof id === 'number' && id > 0 && (opts.enabled ?? true),
   });
 }
 
 /** Look up a task by its human reference, e.g. 'LYR-12'. */
 export function useTaskByRef(ref: string | null | undefined) {
+  const sid = useSpaceId();
   return useQuery({
-    queryKey: qk.taskByRef(ref ?? ''),
-    queryFn: () => http.get<TaskDTO>(`/tasks/ref/${encodeURIComponent(ref ?? '')}`),
+    queryKey: qk.taskByRef(sid, ref ?? ''),
+    queryFn: () => spaceApi(sid).get<TaskDTO>(`/tasks/ref/${encodeURIComponent(ref ?? '')}`),
     enabled: !!ref,
   });
 }
@@ -167,10 +171,10 @@ export function inverseTaskPatch(task: TaskDTO, patch: TaskPatch): TaskPatch {
   return undo;
 }
 
-function cachedRankBounds(qc: QueryClient): { minRank?: string; maxRank?: string } {
+function cachedRankBounds(qc: QueryClient, spaceId: string): { minRank?: string; maxRank?: string } {
   let minRank: string | undefined;
   let maxRank: string | undefined;
-  for (const [, data] of qc.getQueriesData<TaskQueryResult>({ queryKey: ['tasks', 'query'] })) {
+  for (const [, data] of qc.getQueriesData<TaskQueryResult>({ queryKey: qk.taskQueries(spaceId) })) {
     for (const t of data?.tasks ?? []) {
       if (minRank === undefined || t.rank < minRank) minRank = t.rank;
       if (maxRank === undefined || t.rank > maxRank) maxRank = t.rank;
@@ -185,7 +189,7 @@ function cachedRankBounds(qc: QueryClient): { minRank?: string; maxRank?: string
  * `updatedAt` wins; on a tie, the most recently fetched/written query (rank-only changes and
  * counts don't bump updatedAt).
  */
-export function findCachedTask(qc: QueryClient, id: number): TaskDTO | undefined {
+export function findCachedTask(qc: QueryClient, spaceId: string, id: number): TaskDTO | undefined {
   let best: TaskDTO | undefined;
   let bestAt = -1;
   const consider = (task: TaskDTO | undefined, dataUpdatedAt: number) => {
@@ -196,9 +200,9 @@ export function findCachedTask(qc: QueryClient, id: number): TaskDTO | undefined
     }
   };
   const cache = qc.getQueryCache();
-  const detail = cache.find<TaskDTO>({ queryKey: qk.task(id), exact: true });
+  const detail = cache.find<TaskDTO>({ queryKey: qk.task(spaceId, id), exact: true });
   if (detail) consider(detail.state.data, detail.state.dataUpdatedAt);
-  for (const query of cache.findAll({ queryKey: ['tasks', 'query'] })) {
+  for (const query of cache.findAll({ queryKey: qk.taskQueries(spaceId) })) {
     const data = query.state.data as TaskQueryResult | undefined;
     consider(data?.tasks.find((x) => x.id === id), query.state.dataUpdatedAt);
   }
@@ -214,13 +218,13 @@ export type TaskKey = { id: number } | { ref: string };
  * page, a detail entry or a list), then findCachedTask picks the newest copy of that id: the
  * by-ref entry is not updated by edits, the detail entry is.
  */
-export function findCachedTaskByKey(qc: QueryClient, key: TaskKey): TaskDTO | undefined {
-  if ('id' in key) return findCachedTask(qc, key.id);
+export function findCachedTaskByKey(qc: QueryClient, spaceId: string, key: TaskKey): TaskDTO | undefined {
+  if ('id' in key) return findCachedTask(qc, spaceId, key.id);
   const ref = key.ref.toUpperCase();
-  const direct = qc.getQueryData<TaskDTO>(qk.taskByRef(ref));
+  const direct = qc.getQueryData<TaskDTO>(qk.taskByRef(spaceId, ref));
   let id = direct?.id;
   if (id === undefined) {
-    for (const [, data] of qc.getQueriesData<TaskDTO>({ queryKey: ['tasks', 'detail'] })) {
+    for (const [, data] of qc.getQueriesData<TaskDTO>({ queryKey: qk.taskDetails(spaceId) })) {
       if (data?.ref.toUpperCase() === ref) {
         id = data.id;
         break;
@@ -228,7 +232,7 @@ export function findCachedTaskByKey(qc: QueryClient, key: TaskKey): TaskDTO | un
     }
   }
   if (id === undefined) {
-    for (const [, data] of qc.getQueriesData<TaskQueryResult>({ queryKey: ['tasks', 'query'] })) {
+    for (const [, data] of qc.getQueriesData<TaskQueryResult>({ queryKey: qk.taskQueries(spaceId) })) {
       const hit = data?.tasks.find((t) => t.ref.toUpperCase() === ref);
       if (hit) {
         id = hit.id;
@@ -236,13 +240,13 @@ export function findCachedTaskByKey(qc: QueryClient, key: TaskKey): TaskDTO | un
       }
     }
   }
-  return id === undefined ? undefined : (findCachedTask(qc, id) ?? direct);
+  return id === undefined ? undefined : (findCachedTask(qc, spaceId, id) ?? direct);
 }
 
-/** Replace a task everywhere it is cached (detail + every query list). */
-export function writeTaskToCache(qc: QueryClient, task: TaskDTO): void {
-  qc.setQueryData(qk.task(task.id), task);
-  qc.setQueriesData<TaskQueryResult>({ queryKey: ['tasks', 'query'] }, (old) =>
+/** Replace a task everywhere its space caches it (detail + every query list). */
+export function writeTaskToCache(qc: QueryClient, spaceId: string, task: TaskDTO): void {
+  qc.setQueryData(qk.task(spaceId, task.id), task);
+  qc.setQueriesData<TaskQueryResult>({ queryKey: qk.taskQueries(spaceId) }, (old) =>
     old ? { ...old, tasks: old.tasks.map((t) => (t.id === task.id ? task : t)) } : old,
   );
 }
@@ -250,19 +254,19 @@ export function writeTaskToCache(qc: QueryClient, task: TaskDTO): void {
 // ---- Mutations -----------------------------------------------------------------
 
 export function useCreateTask() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: TaskCreateInput) => http.post<TaskDTO>('/tasks', input),
+    mutationFn: (input: TaskCreateInput) => spaceApi(sid).post<TaskDTO>('/tasks', input),
     onSuccess: (task) => {
-      qc.setQueryData(qk.task(task.id), task);
-      return invalidateTasks(qc);
+      qc.setQueryData(qk.task(sid, task.id), task);
+      return invalidateTasks(qc, sid);
     },
   });
 }
 
-/** mutationKey of useUpdateTask (for useMutationState / useIsMutating). */
-export const UPDATE_TASK_MUTATION_KEY = ['tasks', 'update'] as const;
-const UPDATE_KEY = UPDATE_TASK_MUTATION_KEY;
+/** mutationKey of useUpdateTask in a space (for useMutationState / useIsMutating). */
+export const updateTaskMutationKey = (spaceId: string) => ['space', spaceId, 'tasks', 'update'] as const;
 
 export type TaskUpdateVariables = TaskPatch & { id: number };
 
@@ -279,9 +283,9 @@ interface TaskUpdateContext {
 
 type TaskUpdateMutation = Mutation<TaskDTO, Error, TaskUpdateVariables, TaskUpdateContext>;
 
-/** Still-pending updates of the same task submitted after `vars`, oldest first. */
-function newerPendingUpdates(qc: QueryClient, vars: TaskUpdateVariables): TaskUpdateMutation[] {
-  const all = qc.getMutationCache().findAll({ mutationKey: UPDATE_KEY }) as TaskUpdateMutation[];
+/** Still-pending updates of the same task submitted after `vars` in its space, oldest first. */
+function newerPendingUpdates(qc: QueryClient, spaceId: string, vars: TaskUpdateVariables): TaskUpdateMutation[] {
+  const all = qc.getMutationCache().findAll({ mutationKey: updateTaskMutationKey(spaceId) }) as TaskUpdateMutation[];
   const self = all.find((m) => m.state.variables === vars);
   return all
     .filter(
@@ -299,8 +303,8 @@ function newerPendingUpdates(qc: QueryClient, vars: TaskUpdateVariables): TaskUp
  * optimistic rank of moves). Each pending edit's rollback target becomes the state it now
  * starts from, so a later failure of one of them removes only its own change.
  */
-function rebasePending(qc: QueryClient, base: TaskDTO, pending: readonly TaskUpdateMutation[]): TaskDTO {
-  const boot = qc.getQueryData<BootstrapDTO>(qk.bootstrap);
+function rebasePending(qc: QueryClient, spaceId: string, base: TaskDTO, pending: readonly TaskUpdateMutation[]): TaskDTO {
+  const boot = qc.getQueryData<BootstrapDTO>(qk.bootstrap(spaceId));
   let next = base;
   for (const m of pending) {
     const ctx = m.state.context;
@@ -313,52 +317,54 @@ function rebasePending(qc: QueryClient, base: TaskDTO, pending: readonly TaskUpd
 }
 
 /**
- * Options of useUpdateTask (exported for tests). Overlapping edits of one task stay
+ * Options of useUpdateTask in `spaceId` (exported for tests). Overlapping edits of one task stay
  * consistent: a response or a failure of an older edit never hides a newer pending one, and a
- * failure rolls back only that task (other tasks' concurrent edits are untouched).
+ * failure rolls back only that task (other tasks' concurrent edits are untouched). Everything it
+ * touches is the space's own, also when the edit settles after the page moved to another space.
  */
-export function updateTaskOptions(qc: QueryClient) {
+export function updateTaskOptions(qc: QueryClient, spaceId: string) {
+  const mutationKey = updateTaskMutationKey(spaceId);
   return {
-    mutationKey: UPDATE_KEY,
-    mutationFn: ({ id, ...patch }: TaskUpdateVariables) => http.patch<TaskDTO>(`/tasks/${id}`, patch),
+    mutationKey,
+    mutationFn: ({ id, ...patch }: TaskUpdateVariables) => spaceApi(spaceId).patch<TaskDTO>(`/tasks/${id}`, patch),
     onMutate: async (vars: TaskUpdateVariables): Promise<TaskUpdateContext> => {
       const { id, ...patch } = vars;
-      await qc.cancelQueries({ queryKey: qk.tasksAll });
-      const hadDetail = qc.getQueryData(qk.task(id)) !== undefined;
-      const previous = findCachedTask(qc, id);
+      await qc.cancelQueries({ queryKey: qk.tasksAll(spaceId) });
+      const hadDetail = qc.getQueryData(qk.task(spaceId, id)) !== undefined;
+      const previous = findCachedTask(qc, spaceId, id);
       let rank: string | undefined;
       if (previous) {
-        const boot = qc.getQueryData<BootstrapDTO>(qk.bootstrap);
+        const boot = qc.getQueryData<BootstrapDTO>(qk.bootstrap(spaceId));
         const pos = patch.position && typeof patch.position === 'object' && !('rank' in patch.position) ? patch.position : undefined;
         const neighbors = {
-          ...(patch.position === 'top' || patch.position === 'bottom' ? cachedRankBounds(qc) : {}),
-          after: pos?.afterId ? findCachedTask(qc, pos.afterId) : undefined,
-          before: pos?.beforeId ? findCachedTask(qc, pos.beforeId) : undefined,
+          ...(patch.position === 'top' || patch.position === 'bottom' ? cachedRankBounds(qc, spaceId) : {}),
+          after: pos?.afterId ? findCachedTask(qc, spaceId, pos.afterId) : undefined,
+          before: pos?.beforeId ? findCachedTask(qc, spaceId, pos.beforeId) : undefined,
         };
         const next = applyTaskPatch(previous, patch, boot, neighbors);
         if (patch.position !== undefined) rank = next.rank;
-        writeTaskToCache(qc, next);
+        writeTaskToCache(qc, spaceId, next);
       }
       return { previous, rank, hadDetail };
     },
     onError: (_err: Error, vars: TaskUpdateVariables, ctx: TaskUpdateContext | undefined) => {
       if (!ctx) return;
-      const newer = newerPendingUpdates(qc, vars);
-      if (ctx.previous) writeTaskToCache(qc, newer.length ? rebasePending(qc, ctx.previous, newer) : ctx.previous);
+      const newer = newerPendingUpdates(qc, spaceId, vars);
+      if (ctx.previous) writeTaskToCache(qc, spaceId, newer.length ? rebasePending(qc, spaceId, ctx.previous, newer) : ctx.previous);
       // The optimistic write may have created a detail entry that nobody asked for.
       if (!ctx.hadDetail && !newer.length) {
-        qc.removeQueries({ queryKey: qk.task(vars.id), exact: true, predicate: (q) => q.getObserversCount() === 0 });
+        qc.removeQueries({ queryKey: qk.task(spaceId, vars.id), exact: true, predicate: (q) => q.getObserversCount() === 0 });
       }
     },
     onSuccess: (task: TaskDTO, vars: TaskUpdateVariables) => {
-      const newer = newerPendingUpdates(qc, vars);
-      writeTaskToCache(qc, newer.length ? rebasePending(qc, task, newer) : task);
+      const newer = newerPendingUpdates(qc, spaceId, vars);
+      writeTaskToCache(qc, spaceId, newer.length ? rebasePending(qc, spaceId, task, newer) : task);
     },
     // Refetch once the LAST concurrent update settles, so rapid edits/drops don't flicker back.
     // Not awaited: the mutation must settle (rollback + error toast) at once, even offline,
     // where these refetches pause until the connection returns.
     onSettled: () => {
-      if (qc.isMutating({ mutationKey: UPDATE_KEY }) === 1) void invalidateTasks(qc);
+      if (qc.isMutating({ mutationKey }) === 1) void invalidateTasks(qc, spaceId);
     },
   };
 }
@@ -371,63 +377,69 @@ export function updateTaskOptions(qc: QueryClient) {
  * so rapid successive edits/drops don't flicker back.
  */
 export function useUpdateTask() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
-  return useMutation(updateTaskOptions(qc));
+  return useMutation(updateTaskOptions(qc, sid));
 }
 
 export function useDeleteTask() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => http.del<{ ok: true }>(`/tasks/${id}`),
+    mutationFn: (id: number) => spaceApi(sid).del<{ ok: true }>(`/tasks/${id}`),
     onSuccess: (_r, id) => {
-      qc.setQueriesData<TaskQueryResult>({ queryKey: ['tasks', 'query'] }, (old) =>
+      qc.setQueriesData<TaskQueryResult>({ queryKey: qk.taskQueries(sid) }, (old) =>
         old ? { ...old, tasks: old.tasks.filter((t) => t.id !== id), total: Math.max(0, old.total - 1) } : old,
       );
-      return forgetDeletedTasks(qc, [id]);
+      return forgetDeletedTasks(qc, sid, [id]);
     },
   });
 }
 
 export function useDuplicateTask() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => http.post<TaskDTO>(`/tasks/${id}/duplicate`),
-    onSuccess: () => invalidateTasks(qc),
+    mutationFn: (id: number) => spaceApi(sid).post<TaskDTO>(`/tasks/${id}/duplicate`),
+    onSuccess: () => invalidateTasks(qc, sid),
   });
 }
 
 export function useBulkUpdateTasks() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: TaskBulkUpdateInput) => http.post<{ tasks: TaskDTO[] }>('/tasks/bulk', input),
+    mutationFn: (input: TaskBulkUpdateInput) => spaceApi(sid).post<{ tasks: TaskDTO[] }>('/tasks/bulk', input),
     onSuccess: ({ tasks }) => {
-      tasks.forEach((t) => writeTaskToCache(qc, t));
-      return invalidateTasks(qc);
+      tasks.forEach((t) => writeTaskToCache(qc, sid, t));
+      return invalidateTasks(qc, sid);
     },
   });
 }
 
 export function useBulkDeleteTasks() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (ids: number[]) => http.post<{ deleted: number }>('/tasks/bulk-delete', { ids }),
-    onSuccess: (_r, ids) => forgetDeletedTasks(qc, ids),
+    mutationFn: (ids: number[]) => spaceApi(sid).post<{ deleted: number }>('/tasks/bulk-delete', { ids }),
+    onSuccess: (_r, ids) => forgetDeletedTasks(qc, sid, ids),
   });
 }
 
 /**
- * After deleting tasks: drop their own detail/ref/timeline queries and refresh everything else.
- * Queries still observed (the open drawer or task page, which close / navigate away right after)
- * keep their last data instead of being refetched into a 404.
+ * After deleting tasks of `spaceId`: drop their own detail/ref/timeline queries and refresh
+ * everything else. Queries still observed (the open drawer or task page, which close / navigate
+ * away right after) keep their last data instead of being refetched into a 404.
  */
-export function forgetDeletedTasks(qc: QueryClient, ids: readonly number[]): Promise<unknown> {
+export function forgetDeletedTasks(qc: QueryClient, spaceId: string, ids: readonly number[]): Promise<unknown> {
   const gone = new Set(ids);
+  // ['space', spaceId, 'tasks', kind, key]
   const own = (q: Query): boolean => {
-    const [, kind, key] = q.queryKey;
+    const [, , , kind, key] = q.queryKey;
     if (kind === 'detail' || kind === 'timeline') return gone.has(key as number);
     if (kind === 'ref') return gone.has((q.state.data as TaskDTO | undefined)?.id ?? 0);
     return false;
   };
-  qc.removeQueries({ queryKey: qk.tasksAll, predicate: (q) => own(q) && q.getObserversCount() === 0 });
-  return invalidateTasks(qc, own);
+  qc.removeQueries({ queryKey: qk.tasksAll(spaceId), predicate: (q) => own(q) && q.getObserversCount() === 0 });
+  return invalidateTasks(qc, spaceId, own);
 }

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { StatusCategory } from '@shared/constants';
 import type { StatusDTO } from '@shared/types';
-import { checkImportFile } from './importFile';
-import { passwordStrength } from './passwordStrength';
+import { newPasswordErrors, passwordStrength } from './passwordStrength';
 import {
   displayOrder,
   groupStatuses,
@@ -65,6 +64,12 @@ describe('passwordStrength', () => {
     expect(passwordStrength('')).toMatchObject({ score: 0, label: '' });
     expect(passwordStrength('abc12')).toMatchObject({ score: 0, label: 'Too short' });
   });
+  it('uses the instance minimum when given one (12 on Cloudflare)', () => {
+    expect(passwordStrength('', 12).hint).toBe('Use at least 12 characters.');
+    expect(passwordStrength('mellowtigr', 12)).toMatchObject({ score: 0, label: 'Too short', hint: 'Use at least 12 characters.' });
+    expect(passwordStrength('mellowtigress', 12).label).toBe('Fair');
+    expect(passwordStrength('mxkqvbtz').hint).toBe('Longer is stronger: try a passphrase of a few unrelated words.');
+  });
   it('rewards length and variety', () => {
     expect(passwordStrength('mxkqvbtz').label).toBe('Weak');
     expect(passwordStrength('mxkqvbtzwplr').label).toBe('Fair');
@@ -76,6 +81,17 @@ describe('passwordStrength', () => {
     expect(passwordStrength('abcdefghij').score).toBe(1);
     expect(passwordStrength('aaaaaaaaaaaaaaaaaaaaaa').score).toBe(1);
     expect(passwordStrength('87654321').score).toBe(1);
+  });
+});
+
+describe('newPasswordErrors (sign-up, reset, invitations)', () => {
+  it('asks for both fields, the instance minimum and the same password twice', () => {
+    expect(newPasswordErrors('', '', 12)).toEqual({ password: 'Required', confirm: 'Required' });
+    expect(newPasswordErrors('short', 'short', 12)).toEqual({ password: 'At least 12 characters' });
+    expect(newPasswordErrors('long enough phrase', 'long enough phrasE', 12)).toEqual({ confirm: 'Passwords don’t match' });
+    expect(newPasswordErrors('long enough phrase', '', 8)).toEqual({ confirm: 'Required' });
+    expect(newPasswordErrors('x'.repeat(257), 'x'.repeat(257), 8)).toEqual({ password: 'At most 256 characters' });
+    expect(newPasswordErrors('12345678', '12345678', 8)).toEqual({});
   });
 });
 
@@ -135,49 +151,5 @@ describe('statusOrder', () => {
     expect(suggestedReassignTarget(statuses, 5)?.id).toBe(2);
     expect(suggestedReassignTarget([status(1, 'completed', 0), status(2, 'cancelled', 1)], 1)?.id).toBe(2);
     expect(suggestedReassignTarget([status(1, 'completed', 0)], 1)).toBeUndefined();
-  });
-});
-
-describe('checkImportFile', () => {
-  const minimal = {
-    format: 'lyren-plan-export',
-    formatVersion: 1,
-    exportedAt: '2026-01-01T00:00:00.000Z',
-    appVersion: '1.0.0',
-    settings: { weekStartsOn: 1, estimateUnit: 'points', defaultBoardId: null, homePage: 'dashboard' },
-    statuses: [{ id: 1, name: 'Todo', category: 'unstarted', color: '#64748b', position: 0 }],
-    tags: [],
-    projects: [],
-    milestones: [],
-    epics: [],
-    tasks: [],
-    comments: [],
-    worklogs: [],
-    activity: [],
-    boards: [],
-  };
-
-  it('summarises a valid export and keeps the raw payload', () => {
-    const res = checkImportFile(JSON.stringify(minimal));
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.payload).toEqual(minimal);
-    expect(res.summary.appVersion).toBe('1.0.0');
-    expect(res.summary.counts.find((c) => c.key === 'statuses')?.count).toBe(1);
-    expect(res.summary.counts.find((c) => c.key === 'tasks')?.count).toBe(0);
-  });
-
-  it('explains what is wrong', () => {
-    expect(checkImportFile('{nope')).toMatchObject({ ok: false, error: expect.stringMatching(/not valid JSON/) });
-    expect(checkImportFile('[]')).toMatchObject({ ok: false, error: expect.stringMatching(/not a Lyren Plan export/) });
-    expect(checkImportFile(JSON.stringify({ ...minimal, formatVersion: 2 }))).toMatchObject({
-      ok: false,
-      error: expect.stringMatching(/version 2/),
-    });
-    const bad = checkImportFile(JSON.stringify({ ...minimal, statuses: [], tags: [{ id: 'x' }] }));
-    expect(bad.ok).toBe(false);
-    if (bad.ok) return;
-    expect(bad.problems.length).toBeGreaterThan(1);
-    expect(bad.problems.some((p) => p.startsWith('statuses'))).toBe(true);
   });
 });

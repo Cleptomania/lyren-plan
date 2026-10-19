@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CSRF_HEADER } from '@shared/constants';
 import { handleError } from '../src/http/errors';
-import { AUTH_BODY_LIMIT } from '../src/app';
+import { AUTH_BODY_LIMIT } from '../src/core/config';
 import { createTestContext } from './helpers';
 
 const CHUNK = new Uint8Array(1024).fill(0x20);
@@ -51,14 +51,14 @@ describe('body limits and refusal order', () => {
 
     // An endless body: the refusal must come without the server consuming it.
     const anon = stallingBody();
-    const res = await post(ctx.app, '/api/data/import', anon.stream, csrf);
+    const res = await post(ctx.app, ctx.path('/api/data/import/commit?mode=replace'), anon.stream, csrf);
     expect(res.status).toBe(401);
     expect(anon.pulled()).toBeLessThanOrEqual(2 * CHUNK.length); // only the stream's own read-ahead
 
     const noCsrf = stallingBody(4);
-    expect((await post(ctx.app, '/api/data/import', noCsrf.stream)).status).toBe(403);
-    expect((await post(ctx.app, '/api/tasks/query', stallingBody(4).stream)).status).toBe(403);
-    expect((await post(ctx.app, '/api/tasks/query', stallingBody(4).stream, csrf)).status).toBe(401);
+    expect((await post(ctx.app, ctx.path('/api/data/import/commit?mode=replace'), noCsrf.stream)).status).toBe(403);
+    expect((await post(ctx.app, ctx.path('/api/tasks/query'), stallingBody(4).stream)).status).toBe(403);
+    expect((await post(ctx.app, ctx.path('/api/tasks/query'), stallingBody(4).stream, csrf)).status).toBe(401);
   });
 
   it('caps public auth endpoints at a small body limit', async () => {
@@ -81,7 +81,7 @@ describe('body limits and refusal order', () => {
     const { client } = await ctx.signedIn();
     const csrf = { [CSRF_HEADER]: '1', Cookie: client.cookie! };
     const tooBig = stallingBody(5);
-    expect((await post(ctx.app, '/api/tasks/query', tooBig.stream, csrf)).status).toBe(413);
+    expect((await post(ctx.app, ctx.path('/api/tasks/query'), tooBig.stream, csrf)).status).toBe(413);
     expect(tooBig.pulled()).toBe(5 * CHUNK.length);
     expect((await client.post('/api/tasks/query', { pad: 'x'.repeat(3000) })).status).toBe(200); // under the limit
   });

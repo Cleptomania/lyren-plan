@@ -68,8 +68,10 @@ const BLOCKED = tag(32, 'blocked');
 function makeCtx(over: { statuses?: typeof STATUSES } = {}): BoardContext {
   const statuses = over.statuses ?? STATUSES;
   const lookups = buildLookups({
-    user: { id: 1, username: 'o', displayName: 'O', createdAt: '' },
-    settings: { weekStartsOn: 1, estimateUnit: 'points', defaultBoardId: null, homePage: 'dashboard' },
+    user: { id: 1, displayName: 'O' },
+    space: { id: '7k2m9q4w8x1c3v5b', name: 'Space', role: 'owner' },
+    people: [],
+    settings: { estimateUnit: 'points', defaultBoardId: null },
     version: 'test',
     statuses,
     tags: [BUG, IDEA, BLOCKED],

@@ -9,8 +9,10 @@ const tag = (id: number, name: string): TagDTO => ({ id, name, color: '#000000',
 const statuses = [status(1, 'unstarted', 0), status(2, 'started', 1), status(3, 'started', 2), status(4, 'completed', 3)];
 const projects = [project(1, 'WEB'), project(2, 'ME')];
 const lookups = buildLookups({
-  user: { id: 1, username: 'o', displayName: 'O', createdAt: '' },
-  settings: { weekStartsOn: 1, estimateUnit: 'points', defaultBoardId: null, homePage: 'dashboard' },
+  user: { id: 1, displayName: 'O' },
+  space: { id: '7k2m9q4w8x1c3v5b', name: 'Space', role: 'owner' },
+  people: [],
+  settings: { estimateUnit: 'points', defaultBoardId: null },
   version: 't',
   statuses,
   tags: [tag(10, 'bug'), tag(11, 'idea')],

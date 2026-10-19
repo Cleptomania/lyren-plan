@@ -7,6 +7,7 @@ import type { TaskCreateInput } from '@shared/schemas';
 import { useLogout } from '../../api/auth';
 import { useLookups } from '../../api/bootstrap';
 import { findCachedTaskByKey } from '../../api/tasks';
+import { useSpaceId } from '../../app/space';
 import { toast } from '../ui/Toast';
 import { createTaskDefaults } from './navigation';
 
@@ -19,6 +20,7 @@ import { createTaskDefaults } from './navigation';
  * after the caller's last render still counts.
  */
 export function useCreateTaskDefaults(): () => Partial<TaskCreateInput> {
+  const sid = useSpaceId();
   const { pathname, search } = useLocation();
   const qc = useQueryClient();
   const { projectById, epicById, boardById } = useLookups();
@@ -26,9 +28,9 @@ export function useCreateTaskDefaults(): () => Partial<TaskCreateInput> {
     () =>
       createTaskDefaults(
         { pathname, search },
-        { projectById, epicById, boardById, findTask: (key) => findCachedTaskByKey(qc, key) },
+        { projectById, epicById, boardById, findTask: (key) => findCachedTaskByKey(qc, sid, key) },
       ),
-    [pathname, search, qc, projectById, epicById, boardById],
+    [pathname, search, qc, sid, projectById, epicById, boardById],
   );
 }
 

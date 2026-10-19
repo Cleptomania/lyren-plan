@@ -58,6 +58,18 @@ describe('buildTaskActionItems', () => {
     ]);
   });
 
+  it('a role that may not change tasks gets Open and the caller’s extra items only (design §12.9)', () => {
+    const actions = fakeActions();
+    const items = buildTaskActionItems(task(), { lookups: l, today }, actions, {
+      readOnly: true,
+      extra: [{ label: 'Copy link', onSelect: () => {} }],
+    });
+    expect(labels(items)).toEqual(['Open', '---', 'Copy link']);
+    find(items, 'Open').onSelect!();
+    expect(actions.open).toHaveBeenCalledOnce();
+    expect(labels(buildTaskActionItems(task(), { lookups: l, today }, actions, { readOnly: true, onOpen: false }))).toEqual([]);
+  });
+
   it('inserts extra items before the destructive section and can hide Open', () => {
     const extra = vi.fn(() => [{ label: 'Move to column', items: [{ label: 'Done' }] }, false as const]);
     const items = buildTaskActionItems(task(), { lookups: l, today }, fakeActions(), { onOpen: false, extra });

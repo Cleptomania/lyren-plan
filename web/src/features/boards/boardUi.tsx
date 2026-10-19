@@ -1,7 +1,8 @@
 // Board UI context: stable callbacks for cells, cards and group headers (they read the latest
 // config / grid through a ref, so memoized cards keep identical props across renders) plus
 // the display settings and the selection state, in separate contexts so each consumer only
-// re-renders for what it uses.
+// re-renders for what it uses. A role that may not change tasks (design §12.9) gets no "+", no
+// card moves in menus and no drags (BoardDisplay.editable).
 
 import {
   ArrowDown,
@@ -25,6 +26,7 @@ import type { TaskUpdateInput } from '@shared/schemas';
 import type { BootstrapDTO, TaskDTO } from '@shared/types';
 import { qk } from '../../api/keys';
 import { applyTaskPatch, inverseTaskPatch } from '../../api/tasks';
+import { useSpace } from '../../app/space';
 import { taskActions, type ExtraMenuItems } from '../../components/domain';
 import type { MenuItemInput } from '../../components/ui';
 import { openCreateTask } from '../../lib/events';
@@ -62,6 +64,8 @@ export interface BoardUiApi {
 }
 
 export interface BoardDisplay {
+  /** The viewer may create and move tasks (false for viewers). */
+  editable: boolean;
   fields: BoardConfig['card']['fields'];
   density: BoardConfig['card']['density'];
   colorBy: BoardConfig['card']['colorBy'];
@@ -120,21 +124,23 @@ export function BoardUiProvider({
   onConfigure,
   children,
 }: BoardUiProviderProps) {
+  const { id: sid, permissions } = useSpace();
+  const editable = permissions.write;
   const qc = useQueryClient();
-  const latest = useRef({ config, setConfig, model, projectId, selection, onToggleSelected, onConfigure, qc });
+  const latest = useRef({ config, setConfig, model, projectId, selection, onToggleSelected, onConfigure, qc, sid, editable });
   useLayoutEffect(() => {
-    latest.current = { config, setConfig, model, projectId, selection, onToggleSelected, onConfigure, qc };
+    latest.current = { config, setConfig, model, projectId, selection, onToggleSelected, onConfigure, qc, sid, editable };
   });
 
   const api = useMemo<BoardUiApi>(() => {
     const menus = new Map<string, ExtraMenuItems>();
 
     const move = (task: TaskDTO, from: CellRef, to: CellRef, label: string) => {
-      const { config: cfg, model: m, qc: client } = latest.current;
+      const { config: cfg, model: m, qc: client, sid: spaceId } = latest.current;
       const patch = computeDropPatch(cfg, m.ctx, task, from, to);
       if (!patch || Object.keys(patch).length === 0) return;
       // Same landing rule as a drag (SPEC §8.2): overlapping custom groups may keep the card elsewhere.
-      const patched = applyTaskPatch(task, patch, client.getQueryData<BootstrapDTO>(qk.bootstrap));
+      const patched = applyTaskPatch(task, patch, client.getQueryData<BootstrapDTO>(qk.bootstrap(spaceId)));
       const landing = customLandingMessage(cfg, m.ctx, m.grid, patched, from, to);
       taskActions.update(task, patch, { success: withNewRef(task, landing ?? `Moved ${task.ref} to ${label}`), undo: inverseTaskPatch(task, patch) });
     };
@@ -152,7 +158,8 @@ export function BoardUiProvider({
       const cached = menus.get(key);
       if (cached) return cached;
       const build = (task: TaskDTO): MenuItemInput[] => {
-        const { config: cfg, model: m } = latest.current;
+        const { config: cfg, model: m, editable: canMove } = latest.current;
+        if (!canMove) return [];
         const { grid, ctx } = m;
         const from = { lane, col };
         const items: MenuItemInput[] = [{ separator: true }];
@@ -211,7 +218,8 @@ export function BoardUiProvider({
       },
       menuFor,
       quickAdd: (lane, col) => {
-        const { config: cfg, model: m, projectId: pid } = latest.current;
+        const { config: cfg, model: m, projectId: pid, editable: canAdd } = latest.current;
+        if (!canAdd) return;
         openCreateTask(cellCreateDefaults(cfg, m.ctx, { lane, col }, pid, m.filters.server));
       },
       toggleCollapsed: (axis, group) => latest.current.setConfig((c) => setGroupCollapsed(c, axis, group.key, !group.collapsed)),
@@ -260,13 +268,14 @@ export function BoardUiProvider({
 
   const display = useMemo<BoardDisplay>(
     () => ({
+      editable,
       fields: config.card.fields,
       density: config.card.density,
       colorBy: config.card.colorBy,
       manualSort: config.sort.field === 'manual',
       selectMode: selection.active,
     }),
-    [config.card.fields, config.card.density, config.card.colorBy, config.sort.field, selection.active],
+    [editable, config.card.fields, config.card.density, config.card.colorBy, config.sort.field, selection.active],
   );
 
   return (

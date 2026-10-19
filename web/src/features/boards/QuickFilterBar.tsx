@@ -17,6 +17,7 @@ import { Button, IconButton, Input, Picker, PickerList, Sheet, Spinner, Switch }
 import { useIsMobile } from '../../lib/hooks';
 import { EMPTY_QUICK_FILTERS, hasQuickFilters, quickFilterCount, type QuickFilters } from './filters';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace } from '../../app/space';
 
 export interface QuickFilterBarProps {
   value: QuickFilters;
@@ -39,6 +40,8 @@ function summary(names: string[], fallback: string): string {
 
 export function QuickFilterBar({ value, onChange, refreshing, selectMode, onSelectModeChange, mobileList, className }: QuickFilterBarProps) {
   const lookups = useLookups();
+  // Select mode is for bulk edits, which viewers cannot make (design §12.9).
+  const { write } = useSpace().permissions;
   const tagOptions = useTagOptions();
   const priorityOptions = usePriorityOptions();
   const [text, setText] = useState(value.q);
@@ -228,16 +231,18 @@ export function QuickFilterBar({ value, onChange, refreshing, selectMode, onSele
             onClick={() => mobileList.onChange(!mobileList.value)}
           />
         )}
-        <Button
-          size="sm"
-          variant={selectMode ? 'primary' : 'secondary'}
-          icon={<ListChecks />}
-          aria-pressed={selectMode}
-          hideLabelOnMobile
-          onClick={() => onSelectModeChange(!selectMode)}
-        >
-          Select
-        </Button>
+        {write && (
+          <Button
+            size="sm"
+            variant={selectMode ? 'primary' : 'secondary'}
+            icon={<ListChecks />}
+            aria-pressed={selectMode}
+            hideLabelOnMobile
+            onClick={() => onSelectModeChange(!selectMode)}
+          >
+            Select
+          </Button>
+        )}
       </div>
       {mobile && (
         <QuickFilterSheet open={sheetOpen} onClose={() => setSheetOpen(false)} value={value} onChange={onChange} />

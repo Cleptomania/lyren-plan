@@ -1,11 +1,14 @@
 // Database schema and migrations. PRAGMA user_version tracks the applied version.
 // Append new migrations to MIGRATIONS; never edit one that has shipped.
+// user_version and foreign_keys are Node-only (a Durable Object refuses or ignores them), so they go
+// through NodeDb.raw, outside the portability checks (runtime/node/nodeDb.ts).
 //
 // Conventions: snake_case columns; timestamps are ISO-8601 UTC TEXT
 // ('2026-10-13T20:15:00.000Z'); calendar dates are TEXT 'YYYY-MM-DD';
 // booleans are INTEGER 0/1; JSON is TEXT.
 
 import path from 'node:path';
+import type { NodeDb } from '../runtime/node/nodeDb';
 import type { Db } from './index';
 import { DEFAULT_SNAPSHOT_KEEP, logPrune, pruneSnapshots, snapshotStamp } from './snapshots';
 
@@ -197,13 +200,14 @@ export interface MigrateOptions {
   snapshotKeep?: number;
 }
 
-export function runMigrations(db: Db, options: MigrateOptions = {}): void {
+export function runMigrations(db: NodeDb, options: MigrateOptions = {}): void {
   applyMigrations(db, MIGRATIONS, options);
 }
 
 /** runMigrations() with an explicit migration list (exported for tests). */
-export function applyMigrations(db: Db, migrations: ReadonlyArray<Migration>, options: MigrateOptions = {}): void {
-  const current = Number(db.get<{ user_version: number }>('PRAGMA user_version')?.user_version ?? 0);
+export function applyMigrations(db: NodeDb, migrations: ReadonlyArray<Migration>, options: MigrateOptions = {}): void {
+  const userVersion = db.raw.prepare('PRAGMA user_version').get() as { user_version: number } | undefined;
+  const current = Number(userVersion?.user_version ?? 0);
   if (current > migrations.length) {
     throw new Error(
       `Database schema version ${current} is newer than this build supports (${migrations.length}). Upgrade the app.`,
@@ -221,7 +225,7 @@ export function applyMigrations(db: Db, migrations: ReadonlyArray<Migration>, op
     logPrune('before-upgrade', dir, keep, pruneSnapshots(dir, 'before-upgrade', keep, file));
   }
   // Table rebuilds must not cascade; foreign_keys can only change outside a transaction.
-  db.exec('PRAGMA foreign_keys = OFF');
+  db.raw.exec('PRAGMA foreign_keys = OFF');
   try {
     for (let v = current; v < migrations.length; v++) {
       const m = migrations[v]!;
@@ -230,10 +234,10 @@ export function applyMigrations(db: Db, migrations: ReadonlyArray<Migration>, op
         else m(db);
         const bad = db.all('PRAGMA foreign_key_check');
         if (bad.length > 0) throw new Error(`Migration ${v + 1} left ${bad.length} foreign key violation(s)`);
-        db.exec(`PRAGMA user_version = ${v + 1}`);
+        db.raw.exec(`PRAGMA user_version = ${v + 1}`);
       });
     }
   } finally {
-    db.exec('PRAGMA foreign_keys = ON');
+    db.raw.exec('PRAGMA foreign_keys = ON');
   }
 }

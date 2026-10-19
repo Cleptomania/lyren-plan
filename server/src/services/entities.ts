@@ -2,15 +2,35 @@
 // guards, and small helpers for keys, positions, numbering and reorder validation.
 
 import { LIMITS } from '@shared/constants';
-import type { BoardDTO, EpicDTO, MilestoneDTO, ProjectDTO, StatusDTO, TagDTO } from '@shared/types';
+import type {
+  BoardDTO,
+  EpicDTO,
+  MilestoneDTO,
+  PersonDTO,
+  ProgressStats,
+  ProjectDTO,
+  ProjectStats,
+  StatusDTO,
+  TagDTO,
+} from '@shared/types';
 import type { Db } from '../db';
 import { badRequest, conflict, notFound } from '../http/errors';
-import { compareTagNames, toBoardDTO, toEpicDTO, toMilestoneDTO, toProjectDTO, toStatusDTO, toTagDTO } from './mappers';
+import {
+  compareTagNames,
+  toBoardDTO,
+  toEpicDTO,
+  toMilestoneDTO,
+  toPersonDTO,
+  toProjectDTO,
+  toStatusDTO,
+  toTagDTO,
+} from './mappers';
 import type {
   BoardRow,
   CommentRow,
   EpicRow,
   MilestoneRow,
+  MirrorUserRow,
   ProjectRow,
   StatusRow,
   TagRow,
@@ -27,6 +47,7 @@ import {
   projectStats,
   statusTaskCounts,
   tagTaskCounts,
+  type MilestoneStats,
 } from './stats';
 
 // ---------------------------------------------------------------------------
@@ -82,10 +103,12 @@ export function requireTagIds(db: Db, ids: readonly number[], path = 'tagIds'): 
 // DTO lists / getters
 // ---------------------------------------------------------------------------
 
+// The lists take their statistics precomputed when a caller has them (bootstrap: spaceStats, one scan of the
+// tasks for every list).
+
 /** All projects (archived included) ordered by position; `today` drives stats.tasksOverdue. */
-export function listProjects(db: Db, today: string): ProjectDTO[] {
+export function listProjects(db: Db, today: string, stats: Map<number, ProjectStats> = projectStats(db, today)): ProjectDTO[] {
   const rows = db.all<ProjectRow>('SELECT * FROM projects ORDER BY position, id');
-  const stats = projectStats(db, today);
   return rows.map((r) => toProjectDTO(r, stats.get(r.id) ?? emptyProjectStats()));
 }
 
@@ -96,7 +119,7 @@ export function getProject(db: Db, id: number, today: string): ProjectDTO {
 }
 
 /** Milestones of one project (by position) or of all projects (by project position, then position). */
-export function listMilestones(db: Db, projectId?: number): MilestoneDTO[] {
+export function listMilestones(db: Db, projectId?: number, precomputed?: Map<number, MilestoneStats>): MilestoneDTO[] {
   const rows =
     projectId === undefined
       ? db.all<MilestoneRow>(
@@ -106,7 +129,7 @@ export function listMilestones(db: Db, projectId?: number): MilestoneDTO[] {
       : db.all<MilestoneRow>('SELECT * FROM milestones WHERE project_id = :projectId ORDER BY position, id', {
           projectId,
         });
-  const stats = milestoneStats(db, projectId === undefined ? undefined : rows.map((r) => r.id));
+  const stats = precomputed ?? milestoneStats(db, projectId === undefined ? undefined : rows.map((r) => r.id));
   return rows.map((r) => toMilestoneDTO(r, stats.get(r.id) ?? emptyMilestoneStats()));
 }
 
@@ -116,7 +139,7 @@ export function getMilestone(db: Db, id: number): MilestoneDTO {
 }
 
 /** Epics of one project (by position) or of all projects (by project position, then position). */
-export function listEpics(db: Db, projectId?: number): EpicDTO[] {
+export function listEpics(db: Db, projectId?: number, precomputed?: Map<number, ProgressStats>): EpicDTO[] {
   const rows =
     projectId === undefined
       ? db.all<EpicRow>(
@@ -124,7 +147,7 @@ export function listEpics(db: Db, projectId?: number): EpicDTO[] {
             ORDER BY p.position, p.id, e.position, e.id`,
         )
       : db.all<EpicRow>('SELECT * FROM epics WHERE project_id = :projectId ORDER BY position, id', { projectId });
-  const stats = epicStats(db, projectId === undefined ? undefined : rows.map((r) => r.id));
+  const stats = precomputed ?? epicStats(db, projectId === undefined ? undefined : rows.map((r) => r.id));
   return rows.map((r) => toEpicDTO(r, stats.get(r.id) ?? emptyProgressStats()));
 }
 
@@ -134,9 +157,8 @@ export function getEpic(db: Db, id: number): EpicDTO {
 }
 
 /** Statuses by position; taskCount includes archived tasks. */
-export function listStatuses(db: Db): StatusDTO[] {
+export function listStatuses(db: Db, counts: Map<number, number> = statusTaskCounts(db)): StatusDTO[] {
   const rows = db.all<StatusRow>('SELECT * FROM statuses ORDER BY position, id');
-  const counts = statusTaskCounts(db);
   return rows.map((r) => toStatusDTO(r, counts.get(r.id) ?? 0));
 }
 
@@ -146,9 +168,8 @@ export function getStatus(db: Db, id: number): StatusDTO {
 }
 
 /** Tags by name (case-insensitive); taskCount counts non-archived tasks. */
-export function listTags(db: Db): TagDTO[] {
+export function listTags(db: Db, counts: Map<number, number> = tagTaskCounts(db)): TagDTO[] {
   const rows = db.all<TagRow>('SELECT * FROM tags');
-  const counts = tagTaskCounts(db);
   return rows.sort(compareTagNames).map((r) => toTagDTO(r, counts.get(r.id) ?? 0));
 }
 
@@ -171,6 +192,11 @@ export function listBoards(db: Db, projectId?: number | null): BoardDTO[] {
 
 export function getBoard(db: Db, id: number): BoardDTO {
   return toBoardDTO(requireBoard(db, id));
+}
+
+/** Everyone the space's content can name (the users mirror, design §3.5), by name. */
+export function listPeople(db: Db): PersonDTO[] {
+  return db.all<MirrorUserRow>('SELECT * FROM users ORDER BY display_name COLLATE NOCASE, id').map(toPersonDTO);
 }
 
 // ---------------------------------------------------------------------------

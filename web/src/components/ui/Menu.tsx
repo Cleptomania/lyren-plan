@@ -29,6 +29,7 @@ import {
   useState,
   useId,
   type KeyboardEvent,
+  type PointerEvent,
   type ReactElement,
 } from 'react';
 import { useOverlay } from '../../lib/overlays';
@@ -341,6 +342,13 @@ const ROW =
   'flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-[13px] outline-none ' +
   'focus:bg-surface-2 aria-expanded:bg-surface-2 aria-disabled:cursor-default aria-disabled:opacity-45 [&_svg]:size-4 [&_svg]:shrink-0';
 
+/** A label cut by `truncate` shows its whole text on hover (a long space, project or board name). */
+function titleWhenCut(e: PointerEvent<HTMLElement>): void {
+  const el = e.currentTarget;
+  if (el.scrollWidth > el.clientWidth) el.title = el.textContent ?? '';
+  else el.removeAttribute('title');
+}
+
 function RowContent({ item, hasCheck, hasIcon, submenu }: { item: MenuAction; hasCheck: boolean; hasIcon: boolean; submenu?: boolean }) {
   return (
     <>
@@ -350,7 +358,9 @@ function RowContent({ item, hasCheck, hasIcon, submenu }: { item: MenuAction; ha
           {item.icon}
         </span>
       )}
-      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      <span className="min-w-0 flex-1 truncate" onPointerEnter={titleWhenCut}>
+        {item.label}
+      </span>
       {item.hint && <span className="shrink-0 pl-3 text-xs text-fg-subtle">{item.hint}</span>}
       {submenu && <ChevronRight aria-hidden className="-mr-0.5 text-fg-subtle" />}
     </>

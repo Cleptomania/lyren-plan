@@ -7,9 +7,10 @@ import { clsx } from 'clsx';
 import { MoreHorizontal } from 'lucide-react';
 import { forwardRef, useCallback, useMemo, useState, type ButtonHTMLAttributes, type ReactElement } from 'react';
 import { localToday } from '@shared/dates';
-import type { BootstrapDTO, TaskDTO } from '@shared/types';
+import type { AuthStatusDTO, BootstrapDTO, TaskDTO } from '@shared/types';
 import { getLookups, useLookups } from '../../api/bootstrap';
 import { qk } from '../../api/keys';
+import { useSpace } from '../../app/space';
 import { IconButton, Menu, type MenuItem } from '../ui';
 import { taskActions } from './taskActions';
 import { buildTaskActionItems, type ExtraMenuItems, type TaskActionItemsOptions } from './taskActionItems';
@@ -26,10 +27,11 @@ export type TaskActionsOptions = Pick<TaskActionItemsOptions, 'onOpen' | 'onDele
 export function useTaskActions(task: TaskDTO, extra?: ExtraMenuItems, options: TaskActionsOptions = {}): MenuItem[] {
   const lookups = useLookups();
   const today = useSharedToday();
+  const readOnly = !useSpace().permissions.write;
   const { onOpen, onDeleted } = options;
   return useMemo(
-    () => buildTaskActionItems(task, { lookups, today }, taskActions, { onOpen, onDeleted, extra }),
-    [task, lookups, today, extra, onOpen, onDeleted],
+    () => buildTaskActionItems(task, { lookups, today }, taskActions, { onOpen, onDeleted, extra, readOnly }),
+    [task, lookups, today, extra, onOpen, onDeleted, readOnly],
   );
 }
 
@@ -67,6 +69,8 @@ export function TaskActionsMenu({
   open: openProp,
   onOpenChange,
 }: TaskActionsMenuProps) {
+  const { id: sid, permissions } = useSpace();
+  const readOnly = !permissions.write;
   const qc = useQueryClient();
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   // Once opened, keep building items so the panel keeps its content during the exit transition.
@@ -83,14 +87,16 @@ export function TaskActionsMenu({
 
   const items = useMemo(() => {
     if (!open && !activated) return EMPTY;
-    const boot = qc.getQueryData<BootstrapDTO>(qk.bootstrap);
+    const boot = qc.getQueryData<BootstrapDTO>(qk.bootstrap(sid));
     if (!boot) return EMPTY;
-    return buildTaskActionItems(task, { lookups: getLookups(boot), today: localToday() }, taskActions, {
+    const preferences = qc.getQueryData<AuthStatusDTO>(qk.authStatus)?.preferences ?? null;
+    return buildTaskActionItems(task, { lookups: getLookups(boot, preferences), today: localToday() }, taskActions, {
       onOpen,
       onDeleted,
       extra: extraItems,
+      readOnly,
     });
-  }, [open, activated, qc, task, onOpen, onDeleted, extraItems]);
+  }, [open, activated, qc, sid, task, onOpen, onDeleted, extraItems, readOnly]);
 
   const label = `Actions for ${task.ref}`;
   const triggerEl =

@@ -5,6 +5,7 @@ import { defaultBoardConfig, type BoardConfigInput } from '@shared/board';
 import { isClosedCategory, type EpicStatus, type MilestoneStatus, type Priority } from '@shared/constants';
 import { addDays } from '@shared/dates';
 import type { ActivityData } from '@shared/types';
+import { fold } from '../core/fold';
 import type { Db } from '../db';
 import { commentExcerpt, recordActivity, type ActivityEntry } from './activity';
 import { defaultStatusId, nextPosition, nextTaskNumber, uniqueProjectKey } from './entities';
@@ -326,8 +327,8 @@ export function buildSampleData(db: Db, userId: number, clientToday?: string): v
     const id =
       existing?.id ??
       db.run(
-        'INSERT INTO tags (name, color, created_at, updated_at) VALUES (:name, :color, :now, :now)',
-        { name, color: TAG_COLORS[name], now: ago(30) },
+        'INSERT INTO tags (name, name_fold, color, created_at, updated_at) VALUES (:name, :nameFold, :color, :now, :now)',
+        { name, nameFold: fold(name), color: TAG_COLORS[name], now: ago(30) },
       ).lastInsertRowid;
     tagIds.set(name, id);
   }
@@ -337,12 +338,15 @@ export function buildSampleData(db: Db, userId: number, clientToday?: string): v
     const created = ago(project.createdDaysAgo);
     const key = uniqueProjectKey(db, project.key);
     const projectId = db.run(
-      `INSERT INTO projects (key, name, description, color, status, position, created_at, updated_at)
-       VALUES (:key, :name, :description, :color, 'active', :position, :created, :created)`,
+      `INSERT INTO projects (key, name, name_fold, description, description_fold, color, status, position, created_at,
+                             updated_at)
+       VALUES (:key, :name, :nameFold, :description, :descriptionFold, :color, 'active', :position, :created, :created)`,
       {
         key,
         name: project.name,
+        nameFold: fold(project.name),
         description: project.description,
+        descriptionFold: fold(project.description),
         color: project.color,
         position: nextPosition(db, 'projects'),
         created,
@@ -363,9 +367,19 @@ export function buildSampleData(db: Db, userId: number, clientToday?: string): v
     project.milestones.forEach((m, i) => {
       const at = ago(project.createdDaysAgo, -(i + 1));
       const id = db.run(
-        `INSERT INTO milestones (project_id, name, description, status, start_date, due_date, position, created_at, updated_at)
-         VALUES (:projectId, :name, :description, :status, :start, :due, :position, :at, :at)`,
-        { ...m, projectId, start: day(m.start), due: day(m.due), position: i, at },
+        `INSERT INTO milestones (project_id, name, name_fold, description, description_fold, status, start_date, due_date,
+                                position, created_at, updated_at)
+         VALUES (:projectId, :name, :nameFold, :description, :descriptionFold, :status, :start, :due, :position, :at, :at)`,
+        {
+          ...m,
+          nameFold: fold(m.name),
+          descriptionFold: fold(m.description),
+          projectId,
+          start: day(m.start),
+          due: day(m.due),
+          position: i,
+          at,
+        },
       ).lastInsertRowid;
       milestoneIds.set(m.name, id);
       log({
@@ -383,10 +397,12 @@ export function buildSampleData(db: Db, userId: number, clientToday?: string): v
     project.epics.forEach((e, i) => {
       const at = ago(project.createdDaysAgo, -(10 + i));
       const id = db.run(
-        `INSERT INTO epics (project_id, milestone_id, name, description, color, status, start_date, due_date, position, created_at, updated_at)
-         VALUES (:projectId, :milestoneId, :name, '', :color, :status, :start, :due, :position, :at, :at)`,
+        `INSERT INTO epics (project_id, milestone_id, name, name_fold, description, description_fold, color, status,
+                            start_date, due_date, position, created_at, updated_at)
+         VALUES (:projectId, :milestoneId, :name, :nameFold, '', '', :color, :status, :start, :due, :position, :at, :at)`,
         {
           ...e,
+          nameFold: fold(e.name),
           projectId,
           milestoneId: e.milestone === null ? null : (milestoneIds.get(e.milestone) ?? null),
           start: day(e.start),
@@ -418,17 +434,20 @@ export function buildSampleData(db: Db, userId: number, clientToday?: string): v
       const number = nextTaskNumber(db, projectId);
       const ref = `${key}-${number}`;
       const taskId = db.run(
-        `INSERT INTO tasks (project_id, number, epic_id, status_id, title, description, priority, start_date, due_date,
-                            estimate, rank, completed_at, archived_at, created_by, created_at, updated_at)
-         VALUES (:projectId, :number, :epicId, :statusId, :title, :description, :priority, :start, :due,
-                 :estimate, :rank, :completed, :archived, :userId, :created, :updated)`,
+        `INSERT INTO tasks (project_id, number, epic_id, status_id, title, title_fold, description, description_fold,
+                            priority, start_date, due_date, estimate, rank, completed_at, archived_at, created_by,
+                            created_at, updated_at)
+         VALUES (:projectId, :number, :epicId, :statusId, :title, :titleFold, :description, :descriptionFold,
+                 :priority, :start, :due, :estimate, :rank, :completed, :archived, :userId, :created, :updated)`,
         {
           projectId,
           number,
           epicId: t.epic === undefined ? null : (epicIds.get(t.epic) ?? null),
           statusId,
           title: t.title,
+          titleFold: fold(t.title),
           description: t.description ?? '',
+          descriptionFold: fold(t.description ?? ''),
           priority: t.priority,
           start: day(t.start),
           due: day(t.due),

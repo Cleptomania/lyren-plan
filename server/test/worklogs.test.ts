@@ -187,7 +187,7 @@ describe('PATCH /api/worklogs/:id', () => {
 
   it('forbids editing somebody else’s entry (403) and returns 404 for unknown ids', async () => {
     const { ctx, worklog } = await withWorklog();
-    const guest = secondUser(ctx);
+    const guest = await secondUser(ctx);
     const res = await guest.client.patch(`/api/worklogs/${worklog.id}`, { minutes: 5 });
     expect(res.status).toBe(403);
     expect(ctx.db.get<{ minutes: number }>('SELECT minutes FROM work_logs WHERE id = :id', { id: worklog.id })!.minutes).toBe(60);
@@ -217,12 +217,28 @@ describe('DELETE /api/worklogs/:id', () => {
 
   it('forbids deleting somebody else’s entry', async () => {
     const ctx = await setupTimeline();
-    const guest = secondUser(ctx);
+    const guest = await secondUser(ctx);
     const id = insertWorklog(ctx.db, { taskId: ctx.taskId, userId: guest.userId, date: '2026-10-02', minutes: 10 });
-    expect((await ctx.client.delete(`/api/worklogs/${id}`)).status).toBe(403);
+    // §6.5: owners and admins may delete others' entries (moderation deletes), so the one refused is a member.
+    const member = await secondUser(ctx, 'Member', { email: 'third@example.com' });
+    expect((await member.client.delete(`/api/worklogs/${id}`)).status).toBe(403);
     expect(countRows(ctx.db, 'work_logs')).toBe(1);
     expect((await guest.client.delete(`/api/worklogs/${id}`)).status).toBe(200);
     expect(lastActivity(ctx.db)).toMatchObject({ action: 'worklog.deleted', user_id: guest.userId });
+  });
+
+  it('lets owners and admins delete somebody else’s entry, but not edit it (§6.5)', async () => {
+    const ctx = await setupTimeline();
+    const guest = await secondUser(ctx);
+    const admin = await secondUser(ctx, 'Admin', { email: 'admin@example.com', role: 'admin' });
+    const first = insertWorklog(ctx.db, { taskId: ctx.taskId, userId: guest.userId, date: '2026-10-02', minutes: 10 });
+    const second = insertWorklog(ctx.db, { taskId: ctx.taskId, userId: guest.userId, date: '2026-10-03', minutes: 20 });
+    expect((await admin.client.patch(`/api/worklogs/${second}`, { minutes: 5 })).status).toBe(403);
+    expect((await ctx.client.delete(`/api/worklogs/${first}`)).status).toBe(200);
+    expect(lastActivity(ctx.db)).toMatchObject({ action: 'worklog.deleted', user_id: ctx.user.id });
+    expect((await admin.client.delete(`/api/worklogs/${second}`)).status).toBe(200);
+    expect(lastActivity(ctx.db)).toMatchObject({ action: 'worklog.deleted', user_id: admin.userId });
+    expect(countRows(ctx.db, 'work_logs')).toBe(0);
   });
 
   it('cascades with the task', async () => {

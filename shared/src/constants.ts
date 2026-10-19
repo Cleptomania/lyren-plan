@@ -174,14 +174,39 @@ export const LIMITS = {
   bulkMax: 500,
   customColumnsMax: 50,
   worklogMinutesMax: 60 * 24 * 7,
+  spaceNameMax: 80,
+  /** A normalized address (users.email; RFC 5321's path limit). */
+  emailMax: 254,
+  /** What a sign-in or email field accepts before normalization (an address, or a legacy username). */
+  identifierMax: 320,
+  passkeyNameMax: 64,
+  passkeysPerUser: 20,
 } as const;
 
 export const ESTIMATE_UNITS = ['points', 'hours'] as const;
 export type EstimateUnit = (typeof ESTIMATE_UNITS)[number];
 
+// ---------------------------------------------------------------------------
+// Accounts (docs/design/multi-user-and-cloudflare.md §5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Who may create an account (instance setting `signupPolicy`): `open` = anyone, with email
+ * verification (needs a transport that delivers mail); `invite_only` = by accepting an invitation;
+ * `closed` = only by accepting an instance admin's invitation. First-run setup always works.
+ */
+export const SIGNUP_POLICIES = ['open', 'invite_only', 'closed'] as const;
+export type SignupPolicy = (typeof SIGNUP_POLICIES)[number];
+
+/** How a session was created; 'legacy' = carried over from before the multi-user upgrade. */
+export const AUTH_METHODS = ['legacy', 'setup', 'password', 'passkey', 'signup', 'invite'] as const;
+export type AuthMethod = (typeof AUTH_METHODS)[number];
+
 /** Header every mutating API request must carry (CSRF defence; see SPEC.md). */
 export const CSRF_HEADER = 'X-Lyren-Request';
 export const SESSION_COOKIE = 'lyren_session';
+/** The session cookie's name on HTTPS: the __Host- prefix stops sibling subdomains from setting it. */
+export const SESSION_COOKIE_SECURE = '__Host-lyren_session';
 
 /**
  * URL-fragment parameter carrying the first-run setup code: the desktop app opens
@@ -189,3 +214,10 @@ export const SESSION_COOKIE = 'lyren_session';
  * is never sent to the server, so the code can't end up in a request log.
  */
 export const SETUP_CODE_FRAGMENT_PARAM = 'code';
+
+/**
+ * URL-fragment parameter carrying the token of an emailed or copied link (`/invite#t=<token>`,
+ * `/signup/complete#t=`, `/reset#t=`, `/email/confirm#t=`). The SPA reads it, removes it from the
+ * address bar and POSTs it; a fragment never reaches a server log, a Referer or a mail scanner.
+ */
+export const TOKEN_FRAGMENT_PARAM = 't';

@@ -159,7 +159,7 @@ describe('PATCH /api/comments/:id', () => {
 
   it('forbids editing somebody else’s comment (403) and changes nothing', async () => {
     const { ctx, comment } = await withComment();
-    const guest = secondUser(ctx);
+    const guest = await secondUser(ctx);
     const res = await guest.client.patch(`/api/comments/${comment.id}`, { body: 'hijacked' });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('forbidden');
@@ -172,14 +172,15 @@ describe('PATCH /api/comments/:id', () => {
 
   it('locks comments whose author account no longer exists', async () => {
     const ctx = await setupTimeline();
-    const guest = secondUser(ctx);
+    const guest = await secondUser(ctx);
     const created = await guest.client.post<CommentDTO>(`/api/tasks/${ctx.taskId}/comments`, { body: 'from guest' });
     expect(created.body.author).toEqual({ id: guest.userId, displayName: 'Guest' });
     ctx.db.run('DELETE FROM users WHERE id = :id', { id: guest.userId });
     const timeline = await ctx.client.get(`/api/tasks/${ctx.taskId}/timeline`);
     expect(timeline.body.comments[0].author).toBeNull();
     expect((await ctx.client.patch(`/api/comments/${created.body.id}`, { body: 'mine now' })).status).toBe(403);
-    expect((await ctx.client.delete(`/api/comments/${created.body.id}`)).status).toBe(403);
+    // §6.5: owners and admins may delete others' comments (moderation deletes), a removed author's too.
+    expect((await ctx.client.delete(`/api/comments/${created.body.id}`)).status).toBe(200);
   });
 
   it('validates the body (400) and the id (404 / 400)', async () => {
@@ -219,11 +220,23 @@ describe('DELETE /api/comments/:id', () => {
   it('forbids deleting somebody else’s comment (403)', async () => {
     const ctx = await setupTimeline();
     const id = insertComment(ctx.db, { taskId: ctx.taskId, userId: ctx.user.id, body: 'owner’s' });
-    const guest = secondUser(ctx);
+    const guest = await secondUser(ctx);
     const res = await guest.client.delete(`/api/comments/${id}`);
     expect(res.status).toBe(403);
     expect(countRows(ctx.db, 'comments')).toBe(1);
     expect(countRows(ctx.db, 'activity')).toBe(0);
+  });
+
+  it('lets owners and admins delete somebody else’s comment (§6.5)', async () => {
+    const ctx = await setupTimeline();
+    const guest = await secondUser(ctx);
+    const admin = await secondUser(ctx, 'Admin', { email: 'admin@example.com', role: 'admin' });
+    const first = insertComment(ctx.db, { taskId: ctx.taskId, userId: guest.userId, body: 'one' });
+    const second = insertComment(ctx.db, { taskId: ctx.taskId, userId: ctx.user.id, body: 'two' });
+    expect((await admin.client.delete(`/api/comments/${first}`)).status).toBe(200);
+    expect(lastActivity(ctx.db)).toMatchObject({ action: 'comment.deleted', entity_id: first, user_id: admin.userId });
+    expect((await admin.client.delete(`/api/comments/${second}`)).status).toBe(200);
+    expect(countRows(ctx.db, 'comments')).toBe(0);
   });
 
   it('returns 404 / 400 for unknown or invalid ids and requires the CSRF header', async () => {

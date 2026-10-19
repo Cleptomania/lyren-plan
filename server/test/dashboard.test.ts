@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { DashboardDTO } from '@shared/types';
 import type { Db } from '../src/db';
 import { recordActivity } from '../src/services/activity';
-import { saveSettings } from '../src/services/settings';
 import { createTestContext } from './helpers';
 import { insertProject, insertTask, statusIdByName, T0 } from './services.fixtures';
 
@@ -15,8 +14,12 @@ async function setup() {
   const ctx = createTestContext();
   const { client, user } = await ctx.signedIn();
   const project = insertProject(ctx.db, 'WEB', { name: 'Website' });
-  const get = async (today: string | null = TODAY) => {
-    const res = await client.get<DashboardDTO>(`/api/dashboard${today === null ? '' : `?today=${today}`}`);
+  // §3.6: weekStartsOn is the viewer's preference, which the client sends in the query (default 1).
+  const get = async (today: string | null = TODAY, weekStartsOn?: 0 | 1) => {
+    const query = new URLSearchParams();
+    if (today !== null) query.set('today', today);
+    if (weekStartsOn !== undefined) query.set('weekStartsOn', String(weekStartsOn));
+    const res = await client.get<DashboardDTO>(`/api/dashboard${query.size === 0 ? '' : `?${query}`}`);
     expect(res.status).toBe(200);
     return res.body;
   };
@@ -26,11 +29,11 @@ async function setup() {
 const titles = (tasks: Array<{ title: string }>) => tasks.map((t) => t.title);
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
-function insertWorklog(db: Db, taskId: number, date: string, minutes: number | null, note = '') {
+function insertWorklog(db: Db, userId: number | null, taskId: number, date: string, minutes: number | null, note = '') {
   db.run(
     `INSERT INTO work_logs (task_id, user_id, date, minutes, note, created_at, updated_at)
-     VALUES (:taskId, NULL, :date, :minutes, :note, :t, :t)`,
-    { taskId, date, minutes, note, t: T0 },
+     VALUES (:taskId, :userId, :date, :minutes, :note, :t, :t)`,
+    { taskId, userId, date, minutes, note, t: T0 },
   );
 }
 
@@ -247,25 +250,31 @@ describe('GET /api/dashboard', () => {
     });
   });
 
-  it("sums work logs for today and the current week using settings.weekStartsOn", async () => {
-    const { db, project, get } = await setup();
+  it("sums the viewer's work logs for today and the current week using ?weekStartsOn", async () => {
+    const { db, project, get, user, addUser } = await setup();
     const task = insertTask(db, { projectId: project });
     const other = insertTask(db, { projectId: insertProject(db, 'OLD', { status: 'archived' }), archivedAt: T0 });
-    insertWorklog(db, task, '2026-05-16', 99); // Saturday of the previous Monday-week
-    insertWorklog(db, task, '2026-05-17', 30); // Sunday
-    insertWorklog(db, task, '2026-05-18', 60); // Monday
-    insertWorklog(db, task, TODAY, 45);
-    insertWorklog(db, other, TODAY, 15); // time spent counts even on archived work
-    insertWorklog(db, task, TODAY, null, 'note only');
-    insertWorklog(db, task, '2026-05-23', 10); // Saturday
-    insertWorklog(db, task, '2026-05-24', 20); // Sunday
-    insertWorklog(db, task, '2026-05-25', 99); // next Monday
+    const me = user.id;
+    insertWorklog(db, me, task, '2026-05-16', 99); // Saturday of the previous Monday-week
+    insertWorklog(db, me, task, '2026-05-17', 30); // Sunday
+    insertWorklog(db, me, task, '2026-05-18', 60); // Monday
+    insertWorklog(db, me, task, TODAY, 45);
+    insertWorklog(db, me, other, TODAY, 15); // time spent counts even on archived work
+    insertWorklog(db, me, task, TODAY, null, 'note only');
+    insertWorklog(db, me, task, '2026-05-23', 10); // Saturday
+    insertWorklog(db, me, task, '2026-05-24', 20); // Sunday
+    insertWorklog(db, me, task, '2026-05-25', 99); // next Monday
+    // §7.3: the totals are the viewer's own, not another member's, nor a deleted account's.
+    const member = await addUser({ email: 'm@example.com', displayName: 'Mia' });
+    expect((await member.client.get('/api/statuses')).status).toBe(200); // the mirror holds the account now
+    insertWorklog(db, member.user.id, task, TODAY, 500, 'another member');
+    insertWorklog(db, member.user.id, task, '2026-05-19', 400, 'another member');
+    insertWorklog(db, null, task, TODAY, 300, 'a deleted account');
 
     expect((await get()).worklog).toEqual({ todayMinutes: 60, weekMinutes: 60 + 60 + 10 + 20 });
-    saveSettings(db, { weekStartsOn: 0 });
-    expect((await get()).worklog).toEqual({ todayMinutes: 60, weekMinutes: 30 + 60 + 60 + 10 });
+    expect((await get(TODAY, 0)).worklog).toEqual({ todayMinutes: 60, weekMinutes: 30 + 60 + 60 + 10 });
     // Another day of the same week (client's today decides).
-    expect((await get('2026-05-23')).worklog).toEqual({ todayMinutes: 10, weekMinutes: 160 });
+    expect((await get('2026-05-23', 0)).worklog).toEqual({ todayMinutes: 10, weekMinutes: 160 });
   });
 
   it('is read-only (writes no activity)', async () => {

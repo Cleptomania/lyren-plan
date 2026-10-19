@@ -8,6 +8,7 @@ import { LIMITS } from '@shared/constants';
 import type { BoardDTO } from '@shared/types';
 import { useUpdateBoard } from '../../api/boards';
 import { useLookups } from '../../api/bootstrap';
+import { useSpaceId, useSpacePath } from '../../app/space';
 import { FULL_BLEED_MAIN, FullBleedPage, Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { Button, ButtonLink, EmptyState, InlineEdit, toast } from '../../components/ui';
@@ -22,19 +23,22 @@ function parseId(value: string | undefined): number | null {
 }
 
 function BoardNotFound() {
+  const sp = useSpacePath();
   return (
-    <Page header={<PageHeader title="Board not found" backTo="/boards" breadcrumbs={[{ label: 'Boards', to: '/boards' }]} />}>
+    <Page header={<PageHeader title="Board not found" backTo={sp('/boards')} breadcrumbs={[{ label: 'Boards', to: sp('/boards') }]} />}>
       <EmptyState
         icon={<SquareKanban />}
         title="This board doesn’t exist"
         body="It may have been deleted, or the link is wrong."
-        action={<ButtonLink to="/boards">All boards</ButtonLink>}
+        action={<ButtonLink to={sp('/boards')}>All boards</ButtonLink>}
       />
     </Page>
   );
 }
 
 function BoardScreen({ board }: { board: BoardDTO }) {
+  const sp = useSpacePath();
+  const sid = useSpaceId();
   const navigate = useNavigate();
   const lookups = useLookups();
   const actions = useBoardActions();
@@ -48,7 +52,7 @@ function BoardScreen({ board }: { board: BoardDTO }) {
       <span aria-hidden className="size-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: project.color }} />
       <span className="truncate">
         Board of{' '}
-        <Link to={boardHref(board)} className="font-medium text-fg-muted underline-offset-2 hover:text-fg hover:underline">
+        <Link to={boardHref(sid, board)} className="font-medium text-fg-muted underline-offset-2 hover:text-fg hover:underline">
           {project.name}
         </Link>
       </span>
@@ -66,6 +70,7 @@ function BoardScreen({ board }: { board: BoardDTO }) {
             <InlineEdit
               value={board.name}
               aria-label="Board name"
+              disabled={!actions.permissions.write}
               maxLength={LIMITS.boardNameMax}
               onSave={(name) => updateBoard({ id: board.id, name: name.trim() }, { onError: (err) => toast.error(err) })}
               className="-ml-1.5 max-w-full"
@@ -73,10 +78,10 @@ function BoardScreen({ board }: { board: BoardDTO }) {
           }
           subtitle={subtitle}
           icon={<SquareKanban />}
-          backTo="/boards"
+          backTo={sp('/boards')}
           breadcrumbs={[
-            { label: 'Boards', to: '/boards' },
-            ...(project ? [{ label: project.name, to: `/projects/${project.id}/board` }] : []),
+            { label: 'Boards', to: sp('/boards') },
+            ...(project ? [{ label: project.name, to: sp(`/projects/${project.id}/board`) }] : []),
           ]}
           actions={
             <Button icon={<SlidersHorizontal />} hideLabelOnMobile onClick={() => chrome.openPanel()} aria-expanded={chrome.panel.open}>
@@ -84,7 +89,7 @@ function BoardScreen({ board }: { board: BoardDTO }) {
             </Button>
           }
           menu={boardMenuItems(board, actions, {
-            remove: { onConfirmed: () => navigate(project ? `/projects/${project.id}/board` : '/boards', { replace: true }) },
+            remove: { onConfirmed: () => navigate(project ? sp(`/projects/${project.id}/board`) : sp('/boards'), { replace: true }) },
           })}
         >
           <WorkspaceFilterBar ws={ws} chrome={chrome} />

@@ -10,10 +10,12 @@ RUN npm run build
 
 # ---- Runtime stage: just Node + dist/ (no node_modules needed) ----
 FROM node:24-alpine
+# LYREN_CONTAINER: start-up errors give the Docker advice (chown of the bind-mounted data folder).
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8080 \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    LYREN_CONTAINER=1
 WORKDIR /app
 COPY --from=build /app/dist ./dist
 RUN mkdir -p /data && chown node:node /data

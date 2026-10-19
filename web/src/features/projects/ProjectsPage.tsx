@@ -1,5 +1,6 @@
 // /projects — project cards filtered by status (Active / On hold / Completed / Archived / All),
-// "New project", and manual order (drag on desktop, Move up/down in each card's menu).
+// "New project", and manual order (drag on desktop, Move up/down in each card's menu). Viewers only open
+// projects; deleting one is for admins and owners (design §6.2, §12.9).
 
 import { clsx } from 'clsx';
 import {
@@ -19,10 +20,11 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { PROJECT_STATUSES, PROJECT_STATUS_LABELS, type ProjectStatus } from '@shared/constants';
 import type { MilestoneDTO, ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace, useSpaceId } from '../../app/space';
 import { DueDateLabel, markdownExcerpt, useSharedToday } from '../../components/domain';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
-import { Button, Card, EmptyState, IconButton, Menu, ProgressBar, Section, Tabs, toast, type MenuItem } from '../../components/ui';
+import { Button, Card, EmptyState, IconButton, Menu, ProgressBar, Section, Tabs, toast, type MenuItemInput } from '../../components/ui';
 import { percent, pluralize } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/hooks';
 import { projectUrl } from '../../lib/taskLinks';
@@ -57,6 +59,7 @@ export default function ProjectsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ProjectDTO | null>(null);
   const reorder = useReorder('projects');
   const save = useSaveProject();
+  const { write, deleteProjects } = useSpace().permissions;
 
   const setFilter = (next: Filter) =>
     setParams(
@@ -102,9 +105,10 @@ export default function ProjectsPage() {
     if (ids) void reorder(ids);
   };
 
-  const menuFor = (project: ProjectDTO, siblings: ProjectDTO[]): MenuItem[] => {
+  const menuFor = (project: ProjectDTO, siblings: ProjectDTO[]): MenuItemInput[] => {
     const visibleIds = siblings.map((p) => p.id);
     const index = visibleIds.indexOf(project.id);
+    if (!write) return [];
     return [
       {
         label: 'Edit…',
@@ -145,7 +149,7 @@ export default function ProjectsPage() {
         onSelect: () => applyOrder(moveWithinSubset(fullIds, visibleIds, project.id, 1)),
       },
       { separator: true },
-      { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => setDeleteTarget(project) },
+      deleteProjects && { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => setDeleteTarget(project) },
     ];
   };
 
@@ -158,9 +162,11 @@ export default function ProjectsPage() {
         <PageHeader
           title="Projects"
           actions={
-            <Button variant="primary" icon={<Plus />} onClick={openCreate}>
-              New project
-            </Button>
+            write && (
+              <Button variant="primary" icon={<Plus />} onClick={openCreate}>
+                New project
+              </Button>
+            )
           }
         >
           {projects.length > 0 && (
@@ -179,11 +185,13 @@ export default function ProjectsPage() {
         <EmptyState
           icon={<FolderKanban />}
           title="No projects yet"
-          body="Projects hold milestones, epics and tasks. Create your first one to get started."
+          body={write ? 'Projects hold milestones, epics and tasks. Create your first one to get started.' : 'Projects hold milestones, epics and tasks.'}
           action={
-            <Button variant="primary" icon={<Plus />} onClick={openCreate}>
-              New project
-            </Button>
+            write && (
+              <Button variant="primary" icon={<Plus />} onClick={openCreate}>
+                New project
+              </Button>
+            )
           }
         />
       ) : empty && filter !== 'all' ? (
@@ -193,9 +201,11 @@ export default function ProjectsPage() {
           body={EMPTY_FILTER_TEXT[filter].body}
           action={
             filter === 'active' ? (
-              <Button variant="primary" icon={<Plus />} onClick={openCreate}>
-                New project
-              </Button>
+              write && (
+                <Button variant="primary" icon={<Plus />} onClick={openCreate}>
+                  New project
+                </Button>
+              )
             ) : (
               <Button onClick={() => setFilter('all')}>Show all projects</Button>
             )
@@ -214,6 +224,7 @@ export default function ProjectsPage() {
                     getLabel={projectName}
                     noun="projects"
                     layout="grid"
+                    disabled={!write}
                     onMove={(activeId, overId) =>
                       applyOrder(reorderSubset(fullIds, group.items.map(projectId), activeId, overId))
                     }
@@ -232,8 +243,8 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      <ProjectFormDialog open={formOpen} onClose={() => setFormOpen(false)} project={editing} />
-      <DeleteProjectDialog project={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      {write && <ProjectFormDialog open={formOpen} onClose={() => setFormOpen(false)} project={editing} />}
+      {deleteProjects && <DeleteProjectDialog project={deleteTarget} onClose={() => setDeleteTarget(null)} />}
     </Page>
   );
 }
@@ -250,8 +261,9 @@ function ProjectCard({
   project: ProjectDTO;
   milestones: readonly MilestoneDTO[];
   sortable: SortableRenderProps;
-  menu: MenuItem[];
+  menu: MenuItemInput[];
 }) {
+  const sid = useSpaceId();
   const navigate = useNavigate();
   const s = project.stats;
   const excerpt = markdownExcerpt(project.description, 180);
@@ -278,18 +290,20 @@ function ProjectCard({
             <h3 className="mt-0.5 text-[15px] font-semibold leading-snug text-fg">
               {/* Stretched link: the whole card opens the project; controls above it stay clickable. */}
               <Link
-                to={projectUrl(project.id)}
+                to={projectUrl(sid, project.id)}
                 className="break-words outline-none after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-focus"
               >
                 {project.name}
               </Link>
             </h3>
           </div>
-          <Menu
-            label={project.name}
-            items={[{ label: 'Open', icon: <ExternalLink />, onSelect: () => navigate(projectUrl(project.id)) }, { separator: true }, ...menu]}
-            trigger={<IconButton aria-label={`Actions for ${project.name}`} icon={<MoreHorizontal />} className="relative z-10 -mr-2 -mt-1" />}
-          />
+          {menu.some(Boolean) && (
+            <Menu
+              label={project.name}
+              items={[{ label: 'Open', icon: <ExternalLink />, onSelect: () => navigate(projectUrl(sid, project.id)) }, { separator: true }, ...menu]}
+              trigger={<IconButton aria-label={`Actions for ${project.name}`} icon={<MoreHorizontal />} className="relative z-10 -mr-2 -mt-1" />}
+            />
+          )}
         </div>
         {excerpt && <p className="line-clamp-2 text-[13px] leading-5 text-fg-muted">{excerpt}</p>}
         <div className="mt-auto flex flex-col gap-2">

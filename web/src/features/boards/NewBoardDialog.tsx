@@ -8,6 +8,7 @@ import { LIMITS } from '@shared/constants';
 import type { BoardDTO } from '@shared/types';
 import { useCreateBoard } from '../../api/boards';
 import { useLookups } from '../../api/bootstrap';
+import { useSpaceId } from '../../app/space';
 import {
   apiFieldErrors,
   Button,
@@ -39,6 +40,7 @@ export interface NewBoardDialogProps {
 }
 
 export function NewBoardDialog({ open, onClose, projectId: fixedProject, onCreated, beforeCreate }: NewBoardDialogProps) {
+  const sid = useSpaceId();
   const uid = useId();
   const lookups = useLookups();
   const navigate = useNavigate();
@@ -97,7 +99,7 @@ export function NewBoardDialog({ open, onClose, projectId: fixedProject, onCreat
               onCreated(board);
             }
           } else {
-            navigate(boardHref(board), { replace: controls.current?.closeForNavigation() ?? false });
+            navigate(boardHref(sid, board), { replace: controls.current?.closeForNavigation() ?? false });
           }
         },
         onError: (err) => {

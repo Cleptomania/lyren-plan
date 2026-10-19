@@ -1,0 +1,1871 @@
+{
+ "format": "lyren-plan-space",
+ "formatVersion": 2,
+ "exportedAt": "2026-10-19T01:50:17.305Z",
+ "appVersion": "1.0.0",
+ "space": {
+  "id": "enzz6fvct94wc6b5",
+  "name": "Fixture space",
+  "exportedBy": 1
+ },
+ "users": [
+  {
+   "id": -1,
+   "kind": "placeholder",
+   "displayName": "Carol",
+   "email": null
+  },
+  {
+   "id": 1,
+   "kind": "account",
+   "displayName": "Owner",
+   "email": "owner@example.com"
+  },
+  {
+   "id": 2,
+   "kind": "account",
+   "displayName": "Bob",
+   "email": "bob@example.com"
+  }
+ ],
+ "settings": {
+  "estimateUnit": "points",
+  "defaultBoardId": 1
+ },
+ "statuses": [
+  {
+   "id": 1,
+   "name": "Backlog",
+   "category": "backlog",
+   "color": "#94a3b8",
+   "position": 0
+  },
+  {
+   "id": 2,
+   "name": "Todo",
+   "category": "unstarted",
+   "color": "#64748b",
+   "position": 1
+  },
+  {
+   "id": 3,
+   "name": "In Progress",
+   "category": "started",
+   "color": "#3b82f6",
+   "position": 2
+  },
+  {
+   "id": 4,
+   "name": "In Review",
+   "category": "started",
+   "color": "#a855f7",
+   "position": 3
+  },
+  {
+   "id": 5,
+   "name": "Done",
+   "category": "completed",
+   "color": "#22c55e",
+   "position": 4
+  },
+  {
+   "id": 6,
+   "name": "Cancelled",
+   "category": "cancelled",
+   "color": "#ef4444",
+   "position": 5
+  }
+ ],
+ "tags": [
+  {
+   "id": 1,
+   "name": "bug",
+   "color": "#ef4444",
+   "createdAt": "2026-09-19T01:50:17.059Z"
+  },
+  {
+   "id": 2,
+   "name": "idea",
+   "color": "#a855f7",
+   "createdAt": "2026-09-19T01:50:17.059Z"
+  },
+  {
+   "id": 3,
+   "name": "blocked",
+   "color": "#f97316",
+   "createdAt": "2026-09-19T01:50:17.059Z"
+  },
+  {
+   "id": 4,
+   "name": "quick win",
+   "color": "#22c55e",
+   "createdAt": "2026-09-19T01:50:17.059Z"
+  }
+ ],
+ "projects": [
+  {
+   "id": 1,
+   "key": "WEB",
+   "name": "Website Relaunch",
+   "description": "Rebuild the marketing site on the new design system.\n\n- **Goal:** faster pages, easier editing, consistent look\n- **Launch:** end of the MVP milestone",
+   "color": "#6366f1",
+   "status": "active",
+   "position": 0,
+   "taskCounter": 19,
+   "createdAt": "2026-09-19T01:50:17.059Z",
+   "updatedAt": "2026-09-19T01:50:17.059Z"
+  },
+  {
+   "id": 2,
+   "key": "ME",
+   "name": "Personal",
+   "description": "Errands and personal to-dos.",
+   "color": "#10b981",
+   "status": "active",
+   "position": 1,
+   "taskCounter": 4,
+   "createdAt": "2026-09-28T01:50:17.059Z",
+   "updatedAt": "2026-09-28T01:50:17.059Z"
+  }
+ ],
+ "milestones": [
+  {
+   "id": 1,
+   "projectId": 1,
+   "name": "MVP launch",
+   "description": "New design, migrated content and redirects live.",
+   "status": "active",
+   "startDate": "2026-09-21",
+   "dueDate": "2026-11-09",
+   "position": 0,
+   "completedAt": null,
+   "createdAt": "2026-09-19T01:51:17.059Z",
+   "updatedAt": "2026-09-19T01:51:17.059Z"
+  },
+  {
+   "id": 2,
+   "projectId": 1,
+   "name": "Post-launch polish",
+   "description": "Performance work and the follow-ups we parked for launch.",
+   "status": "planned",
+   "startDate": "2026-11-10",
+   "dueDate": "2026-12-18",
+   "position": 1,
+   "completedAt": null,
+   "createdAt": "2026-09-19T01:52:17.059Z",
+   "updatedAt": "2026-09-19T01:52:17.059Z"
+  }
+ ],
+ "epics": [
+  {
+   "id": 1,
+   "projectId": 1,
+   "milestoneId": 1,
+   "name": "Design system",
+   "description": "",
+   "color": "#ec4899",
+   "status": "in_progress",
+   "startDate": "2026-09-21",
+   "dueDate": "2026-10-26",
+   "position": 0,
+   "completedAt": null,
+   "createdAt": "2026-09-19T02:00:17.059Z",
+   "updatedAt": "2026-09-19T02:00:17.059Z"
+  },
+  {
+   "id": 2,
+   "projectId": 1,
+   "milestoneId": 1,
+   "name": "Content migration",
+   "description": "",
+   "color": "#f59e0b",
+   "status": "in_progress",
+   "startDate": "2026-09-29",
+   "dueDate": "2026-11-06",
+   "position": 1,
+   "completedAt": null,
+   "createdAt": "2026-09-19T02:01:17.059Z",
+   "updatedAt": "2026-09-19T02:01:17.059Z"
+  },
+  {
+   "id": 3,
+   "projectId": 1,
+   "milestoneId": 2,
+   "name": "Performance",
+   "description": "",
+   "color": "#06b6d4",
+   "status": "open",
+   "startDate": "2026-11-10",
+   "dueDate": "2026-12-03",
+   "position": 2,
+   "completedAt": null,
+   "createdAt": "2026-09-19T02:02:17.059Z",
+   "updatedAt": "2026-09-19T02:02:17.059Z"
+  },
+  {
+   "id": 4,
+   "projectId": 1,
+   "milestoneId": null,
+   "name": "Analytics",
+   "description": "",
+   "color": "#84cc16",
+   "status": "open",
+   "startDate": null,
+   "dueDate": null,
+   "position": 3,
+   "completedAt": null,
+   "createdAt": "2026-09-19T02:03:17.059Z",
+   "updatedAt": "2026-09-19T02:03:17.059Z"
+  }
+ ],
+ "tasks": [
+  {
+   "id": 1,
+   "projectId": 1,
+   "number": 1,
+   "epicId": 1,
+   "statusId": 5,
+   "priority": 3,
+   "title": "Define color tokens and typography scale",
+   "description": "Agree on semantic tokens (`surface`, `fg-muted`, `accent` …) and a modular type scale.",
+   "startDate": null,
+   "dueDate": "2026-10-09",
+   "estimate": 3,
+   "rank": "a0",
+   "completedAt": "2026-10-10T01:50:17.059Z",
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-09-22T01:50:17.059Z",
+   "updatedAt": "2026-10-10T01:50:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 2,
+   "projectId": 1,
+   "number": 2,
+   "epicId": 1,
+   "statusId": 5,
+   "priority": 2,
+   "title": "Build button, input and select components",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-14",
+   "estimate": 5,
+   "rank": "a1",
+   "completedAt": "2026-10-15T01:49:17.059Z",
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-09-23T01:49:17.059Z",
+   "updatedAt": "2026-10-15T01:49:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 3,
+   "projectId": 1,
+   "number": 3,
+   "epicId": 1,
+   "statusId": 4,
+   "priority": 2,
+   "title": "Dark mode for all components",
+   "description": "Every component must read well in both themes. Check contrast with the token pairs.",
+   "startDate": "2026-10-16",
+   "dueDate": "2026-10-21",
+   "estimate": 3,
+   "rank": "a2",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-09-29T01:48:17.059Z",
+   "updatedAt": "2026-09-29T01:48:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 4,
+   "projectId": 1,
+   "number": 4,
+   "epicId": 1,
+   "statusId": 3,
+   "priority": 4,
+   "title": "Focus ring missing in Safari",
+   "description": "Keyboard users get no visible focus on links inside cards.",
+   "startDate": null,
+   "dueDate": "2026-10-19",
+   "estimate": 1,
+   "rank": "a3",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-16T01:47:17.059Z",
+   "updatedAt": "2026-10-16T01:47:17.059Z",
+   "tagIds": [
+    1
+   ]
+  },
+  {
+   "id": 5,
+   "projectId": 1,
+   "number": 5,
+   "epicId": 1,
+   "statusId": 2,
+   "priority": 1,
+   "title": "Document component usage",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-25",
+   "estimate": 2,
+   "rank": "a4",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-04T01:46:17.059Z",
+   "updatedAt": "2026-10-04T01:46:17.059Z",
+   "tagIds": [
+    2
+   ]
+  },
+  {
+   "id": 6,
+   "projectId": 1,
+   "number": 6,
+   "epicId": 2,
+   "statusId": 5,
+   "priority": 3,
+   "title": "Inventory existing pages and redirects",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-05",
+   "estimate": 2,
+   "rank": "a5",
+   "completedAt": "2026-10-07T01:45:17.059Z",
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-09-24T01:45:17.059Z",
+   "updatedAt": "2026-10-07T01:45:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 7,
+   "projectId": 1,
+   "number": 7,
+   "epicId": 2,
+   "statusId": 3,
+   "priority": 3,
+   "title": "Migrate blog posts to Markdown",
+   "description": "About 120 posts. Galleries need manual work.",
+   "startDate": "2026-10-13",
+   "dueDate": "2026-10-17",
+   "estimate": 8,
+   "rank": "a6",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-01T01:44:17.059Z",
+   "updatedAt": "2026-10-01T01:44:17.059Z",
+   "tagIds": [
+    3
+   ]
+  },
+  {
+   "id": 8,
+   "projectId": 1,
+   "number": 8,
+   "epicId": 2,
+   "statusId": 2,
+   "priority": 4,
+   "title": "Set up 301 redirects for old URLs",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-20",
+   "estimate": 2,
+   "rank": "a7",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-07T01:43:17.059Z",
+   "updatedAt": "2026-10-07T01:43:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 9,
+   "projectId": 1,
+   "number": 9,
+   "epicId": 2,
+   "statusId": 2,
+   "priority": 1,
+   "title": "Proofread About and Team pages",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-23",
+   "estimate": 1,
+   "rank": "a8",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-09T01:42:17.059Z",
+   "updatedAt": "2026-10-09T01:42:17.059Z",
+   "tagIds": [
+    4
+   ]
+  },
+  {
+   "id": 10,
+   "projectId": 1,
+   "number": 10,
+   "epicId": 2,
+   "statusId": 6,
+   "priority": 0,
+   "title": "Merge duplicate press-release pages",
+   "description": "",
+   "startDate": null,
+   "dueDate": null,
+   "estimate": null,
+   "rank": "a9",
+   "completedAt": "2026-10-13T01:41:17.059Z",
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-03T01:41:17.059Z",
+   "updatedAt": "2026-10-13T01:41:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 11,
+   "projectId": 1,
+   "number": 11,
+   "epicId": 3,
+   "statusId": 1,
+   "priority": 2,
+   "title": "Lazy-load below-the-fold images",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-11-28",
+   "estimate": 2,
+   "rank": "aA",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-05T01:40:17.059Z",
+   "updatedAt": "2026-10-05T01:40:17.059Z",
+   "tagIds": [
+    4
+   ]
+  },
+  {
+   "id": 12,
+   "projectId": 1,
+   "number": 12,
+   "epicId": 3,
+   "statusId": 2,
+   "priority": 3,
+   "title": "Hero image causes layout shift on mobile",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-18",
+   "estimate": 1,
+   "rank": "aB",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-14T01:39:17.059Z",
+   "updatedAt": "2026-10-14T01:39:17.059Z",
+   "tagIds": [
+    1
+   ]
+  },
+  {
+   "id": 13,
+   "projectId": 1,
+   "number": 13,
+   "epicId": 3,
+   "statusId": 1,
+   "priority": 1,
+   "title": "Add a performance budget to CI",
+   "description": "",
+   "startDate": null,
+   "dueDate": null,
+   "estimate": 3,
+   "rank": "aC",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-10T01:38:17.059Z",
+   "updatedAt": "2026-10-10T01:38:17.059Z",
+   "tagIds": [
+    2
+   ]
+  },
+  {
+   "id": 14,
+   "projectId": 1,
+   "number": 14,
+   "epicId": 4,
+   "statusId": 3,
+   "priority": 2,
+   "title": "Choose a privacy-friendly analytics setup",
+   "description": "Self-hosted, no cookies, no third-party requests.",
+   "startDate": null,
+   "dueDate": "2026-10-22",
+   "estimate": 2,
+   "rank": "aD",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-11T01:37:17.059Z",
+   "updatedAt": "2026-10-11T01:37:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 15,
+   "projectId": 1,
+   "number": 15,
+   "epicId": 4,
+   "statusId": 1,
+   "priority": 0,
+   "title": "Define the key conversion events",
+   "description": "",
+   "startDate": null,
+   "dueDate": null,
+   "estimate": null,
+   "rank": "aE",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-12T01:36:17.059Z",
+   "updatedAt": "2026-10-12T01:36:17.059Z",
+   "tagIds": [
+    2
+   ]
+  },
+  {
+   "id": 16,
+   "projectId": 1,
+   "number": 16,
+   "epicId": null,
+   "statusId": 2,
+   "priority": 4,
+   "title": "Contact form sends duplicate emails",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-16",
+   "estimate": 2,
+   "rank": "aF",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-13T01:35:17.059Z",
+   "updatedAt": "2026-10-13T01:35:17.059Z",
+   "tagIds": [
+    1,
+    3
+   ]
+  },
+  {
+   "id": 17,
+   "projectId": 1,
+   "number": 17,
+   "epicId": null,
+   "statusId": 5,
+   "priority": 0,
+   "title": "Landing page A/B experiment",
+   "description": "",
+   "startDate": null,
+   "dueDate": null,
+   "estimate": null,
+   "rank": "aG",
+   "completedAt": "2026-09-25T01:34:17.059Z",
+   "archivedAt": "2026-09-29T01:34:17.059Z",
+   "createdBy": 1,
+   "createdAt": "2026-09-20T01:34:17.059Z",
+   "updatedAt": "2026-09-29T01:34:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 18,
+   "projectId": 2,
+   "number": 1,
+   "epicId": null,
+   "statusId": 2,
+   "priority": 3,
+   "title": "Renew passport",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-29",
+   "estimate": null,
+   "rank": "aH",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-07T01:50:17.059Z",
+   "updatedAt": "2026-10-07T01:50:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 19,
+   "projectId": 2,
+   "number": 2,
+   "epicId": null,
+   "statusId": 2,
+   "priority": 2,
+   "title": "Book dentist appointment",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-21",
+   "estimate": null,
+   "rank": "aI",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-15T01:49:17.059Z",
+   "updatedAt": "2026-10-15T01:49:17.059Z",
+   "tagIds": [
+    4
+   ]
+  },
+  {
+   "id": 20,
+   "projectId": 2,
+   "number": 3,
+   "epicId": null,
+   "statusId": 1,
+   "priority": 1,
+   "title": "Plan a weekend hiking trip",
+   "description": "",
+   "startDate": null,
+   "dueDate": null,
+   "estimate": null,
+   "rank": "aJ",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-10-16T01:48:17.059Z",
+   "updatedAt": "2026-10-16T01:48:17.059Z",
+   "tagIds": [
+    2
+   ]
+  },
+  {
+   "id": 21,
+   "projectId": 2,
+   "number": 4,
+   "epicId": null,
+   "statusId": 5,
+   "priority": 4,
+   "title": "File tax return",
+   "description": "",
+   "startDate": null,
+   "dueDate": "2026-10-12",
+   "estimate": null,
+   "rank": "aK",
+   "completedAt": "2026-10-11T01:47:17.059Z",
+   "archivedAt": null,
+   "createdBy": 1,
+   "createdAt": "2026-09-30T01:47:17.059Z",
+   "updatedAt": "2026-10-11T01:47:17.059Z",
+   "tagIds": []
+  },
+  {
+   "id": 22,
+   "projectId": 1,
+   "number": 18,
+   "epicId": null,
+   "statusId": 2,
+   "priority": 0,
+   "title": "Bob's task",
+   "description": "",
+   "startDate": null,
+   "dueDate": null,
+   "estimate": 0.3,
+   "rank": "aL",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": 2,
+   "createdAt": "2026-10-19T01:50:17.242Z",
+   "updatedAt": "2026-10-19T01:50:17.242Z",
+   "tagIds": []
+  },
+  {
+   "id": 23,
+   "projectId": 1,
+   "number": 19,
+   "epicId": null,
+   "statusId": 2,
+   "priority": 0,
+   "title": "Carol's task",
+   "description": "",
+   "startDate": null,
+   "dueDate": null,
+   "estimate": 0.3,
+   "rank": "aM",
+   "completedAt": null,
+   "archivedAt": null,
+   "createdBy": -1,
+   "createdAt": "2026-10-19T01:50:17.246Z",
+   "updatedAt": "2026-10-19T01:50:17.246Z",
+   "tagIds": []
+  }
+ ],
+ "comments": [
+  {
+   "id": 1,
+   "taskId": 3,
+   "body": "Muted text in dark mode needs another contrast pass — see the card footer.",
+   "authorId": 1,
+   "createdAt": "2026-10-18T01:48:17.059Z",
+   "updatedAt": "2026-10-18T01:48:17.059Z",
+   "editedAt": null
+  },
+  {
+   "id": 2,
+   "taskId": 4,
+   "body": "Reproducible in Safari 17 with keyboard navigation only; mouse focus is fine.",
+   "authorId": 1,
+   "createdAt": "2026-10-17T01:47:17.059Z",
+   "updatedAt": "2026-10-17T01:47:17.059Z",
+   "editedAt": null
+  },
+  {
+   "id": 3,
+   "taskId": 7,
+   "body": "Blocked on the CMS export — IT promised it for Thursday.",
+   "authorId": 1,
+   "createdAt": "2026-10-15T01:44:17.059Z",
+   "updatedAt": "2026-10-15T01:44:17.059Z",
+   "editedAt": null
+  },
+  {
+   "id": 4,
+   "taskId": 7,
+   "body": "Exported 40 of 120 posts; the rest have embedded galleries.",
+   "authorId": 1,
+   "createdAt": "2026-10-18T01:44:17.059Z",
+   "updatedAt": "2026-10-18T01:44:17.059Z",
+   "editedAt": null
+  },
+  {
+   "id": 5,
+   "taskId": 10,
+   "body": "Not needed — the old press section is being dropped entirely.",
+   "authorId": 1,
+   "createdAt": "2026-10-13T01:41:17.059Z",
+   "updatedAt": "2026-10-13T01:41:17.059Z",
+   "editedAt": null
+  },
+  {
+   "id": 6,
+   "taskId": 2,
+   "body": "Bob was here",
+   "authorId": 2,
+   "createdAt": "2026-10-19T01:50:17.236Z",
+   "updatedAt": "2026-10-19T01:50:17.236Z",
+   "editedAt": null,
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  },
+  {
+   "id": 7,
+   "taskId": 2,
+   "body": "Carol was here",
+   "authorId": -1,
+   "createdAt": "2026-10-19T01:50:17.244Z",
+   "updatedAt": "2026-10-19T01:50:17.244Z",
+   "editedAt": null,
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  }
+ ],
+ "worklogs": [
+  {
+   "id": 1,
+   "taskId": 1,
+   "date": "2026-10-08",
+   "minutes": 120,
+   "note": "Token naming workshop",
+   "authorId": 1,
+   "createdAt": "2026-10-08T17:30:00.000Z",
+   "updatedAt": "2026-10-08T17:30:00.000Z"
+  },
+  {
+   "id": 2,
+   "taskId": 2,
+   "date": "2026-10-13",
+   "minutes": 180,
+   "note": "Buttons and text inputs",
+   "authorId": 1,
+   "createdAt": "2026-10-13T17:30:00.000Z",
+   "updatedAt": "2026-10-13T17:30:00.000Z"
+  },
+  {
+   "id": 3,
+   "taskId": 2,
+   "date": "2026-10-14",
+   "minutes": 90,
+   "note": "Select component and tests",
+   "authorId": 1,
+   "createdAt": "2026-10-14T17:30:00.000Z",
+   "updatedAt": "2026-10-14T17:30:00.000Z"
+  },
+  {
+   "id": 4,
+   "taskId": 4,
+   "date": "2026-10-19",
+   "minutes": 45,
+   "note": "Investigated :focus-visible behaviour",
+   "authorId": 1,
+   "createdAt": "2026-10-19T01:49:17.059Z",
+   "updatedAt": "2026-10-19T01:49:17.059Z"
+  },
+  {
+   "id": 5,
+   "taskId": 7,
+   "date": "2026-10-17",
+   "minutes": 150,
+   "note": "Migrated the first batch of posts",
+   "authorId": 1,
+   "createdAt": "2026-10-17T17:30:00.000Z",
+   "updatedAt": "2026-10-17T17:30:00.000Z"
+  },
+  {
+   "id": 6,
+   "taskId": 21,
+   "date": "2026-10-11",
+   "minutes": 60,
+   "note": "Filled in the forms",
+   "authorId": 1,
+   "createdAt": "2026-10-11T17:30:00.000Z",
+   "updatedAt": "2026-10-11T17:30:00.000Z"
+  },
+  {
+   "id": 7,
+   "taskId": 3,
+   "date": "2026-10-01",
+   "minutes": 45,
+   "note": "Bob",
+   "authorId": 2,
+   "createdAt": "2026-10-19T01:50:17.240Z",
+   "updatedAt": "2026-10-19T01:50:17.240Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  },
+  {
+   "id": 8,
+   "taskId": 3,
+   "date": "2026-10-01",
+   "minutes": 45,
+   "note": "Carol",
+   "authorId": -1,
+   "createdAt": "2026-10-19T01:50:17.245Z",
+   "updatedAt": "2026-10-19T01:50:17.245Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  }
+ ],
+ "activity": [
+  {
+   "id": 1,
+   "action": "project.created",
+   "entityType": "project",
+   "entityId": 1,
+   "projectId": 1,
+   "taskId": null,
+   "data": {
+    "name": "Website Relaunch"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-19T01:50:17.059Z"
+  },
+  {
+   "id": 2,
+   "action": "milestone.created",
+   "entityType": "milestone",
+   "entityId": 1,
+   "projectId": 1,
+   "taskId": null,
+   "data": {
+    "name": "MVP launch"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-19T01:51:17.059Z"
+  },
+  {
+   "id": 3,
+   "action": "milestone.created",
+   "entityType": "milestone",
+   "entityId": 2,
+   "projectId": 1,
+   "taskId": null,
+   "data": {
+    "name": "Post-launch polish"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-19T01:52:17.059Z"
+  },
+  {
+   "id": 4,
+   "action": "epic.created",
+   "entityType": "epic",
+   "entityId": 1,
+   "projectId": 1,
+   "taskId": null,
+   "data": {
+    "name": "Design system"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-19T02:00:17.059Z"
+  },
+  {
+   "id": 5,
+   "action": "epic.created",
+   "entityType": "epic",
+   "entityId": 2,
+   "projectId": 1,
+   "taskId": null,
+   "data": {
+    "name": "Content migration"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-19T02:01:17.059Z"
+  },
+  {
+   "id": 6,
+   "action": "epic.created",
+   "entityType": "epic",
+   "entityId": 3,
+   "projectId": 1,
+   "taskId": null,
+   "data": {
+    "name": "Performance"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-19T02:02:17.059Z"
+  },
+  {
+   "id": 7,
+   "action": "epic.created",
+   "entityType": "epic",
+   "entityId": 4,
+   "projectId": 1,
+   "taskId": null,
+   "data": {
+    "name": "Analytics"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-19T02:03:17.059Z"
+  },
+  {
+   "id": 8,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 17,
+   "projectId": 1,
+   "taskId": 17,
+   "data": {
+    "title": "Landing page A/B experiment",
+    "ref": "WEB-17"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-20T01:34:17.059Z"
+  },
+  {
+   "id": 9,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 1,
+   "projectId": 1,
+   "taskId": 1,
+   "data": {
+    "title": "Define color tokens and typography scale",
+    "ref": "WEB-1"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-22T01:50:17.059Z"
+  },
+  {
+   "id": 10,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 2,
+   "projectId": 1,
+   "taskId": 2,
+   "data": {
+    "title": "Build button, input and select components",
+    "ref": "WEB-2"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-23T01:49:17.059Z"
+  },
+  {
+   "id": 11,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 6,
+   "projectId": 1,
+   "taskId": 6,
+   "data": {
+    "title": "Inventory existing pages and redirects",
+    "ref": "WEB-6"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-24T01:45:17.059Z"
+  },
+  {
+   "id": 12,
+   "action": "task.updated",
+   "entityType": "task",
+   "entityId": 17,
+   "projectId": 1,
+   "taskId": 17,
+   "data": {
+    "changes": [
+     {
+      "field": "status",
+      "from": 2,
+      "to": 5,
+      "fromLabel": "Todo",
+      "toLabel": "Done"
+     }
+    ],
+    "title": "Landing page A/B experiment",
+    "ref": "WEB-17"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-25T01:34:17.059Z"
+  },
+  {
+   "id": 13,
+   "action": "project.created",
+   "entityType": "project",
+   "entityId": 2,
+   "projectId": 2,
+   "taskId": null,
+   "data": {
+    "name": "Personal"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-28T01:50:17.059Z"
+  },
+  {
+   "id": 14,
+   "action": "task.updated",
+   "entityType": "task",
+   "entityId": 17,
+   "projectId": 1,
+   "taskId": 17,
+   "data": {
+    "changes": [
+     {
+      "field": "archived",
+      "from": false,
+      "to": true
+     }
+    ],
+    "title": "Landing page A/B experiment",
+    "ref": "WEB-17"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-29T01:34:17.059Z"
+  },
+  {
+   "id": 15,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 3,
+   "projectId": 1,
+   "taskId": 3,
+   "data": {
+    "title": "Dark mode for all components",
+    "ref": "WEB-3"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-29T01:48:17.059Z"
+  },
+  {
+   "id": 16,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 21,
+   "projectId": 2,
+   "taskId": 21,
+   "data": {
+    "title": "File tax return",
+    "ref": "ME-4"
+   },
+   "actorId": 1,
+   "createdAt": "2026-09-30T01:47:17.059Z"
+  },
+  {
+   "id": 17,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 7,
+   "projectId": 1,
+   "taskId": 7,
+   "data": {
+    "title": "Migrate blog posts to Markdown",
+    "ref": "WEB-7"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-01T01:44:17.059Z"
+  },
+  {
+   "id": 18,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 10,
+   "projectId": 1,
+   "taskId": 10,
+   "data": {
+    "title": "Merge duplicate press-release pages",
+    "ref": "WEB-10"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-03T01:41:17.059Z"
+  },
+  {
+   "id": 19,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 5,
+   "projectId": 1,
+   "taskId": 5,
+   "data": {
+    "title": "Document component usage",
+    "ref": "WEB-5"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-04T01:46:17.059Z"
+  },
+  {
+   "id": 20,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 11,
+   "projectId": 1,
+   "taskId": 11,
+   "data": {
+    "title": "Lazy-load below-the-fold images",
+    "ref": "WEB-11"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-05T01:40:17.059Z"
+  },
+  {
+   "id": 21,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 8,
+   "projectId": 1,
+   "taskId": 8,
+   "data": {
+    "title": "Set up 301 redirects for old URLs",
+    "ref": "WEB-8"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-07T01:43:17.059Z"
+  },
+  {
+   "id": 22,
+   "action": "task.updated",
+   "entityType": "task",
+   "entityId": 6,
+   "projectId": 1,
+   "taskId": 6,
+   "data": {
+    "changes": [
+     {
+      "field": "status",
+      "from": 2,
+      "to": 5,
+      "fromLabel": "Todo",
+      "toLabel": "Done"
+     }
+    ],
+    "title": "Inventory existing pages and redirects",
+    "ref": "WEB-6"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-07T01:45:17.059Z"
+  },
+  {
+   "id": 23,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 18,
+   "projectId": 2,
+   "taskId": 18,
+   "data": {
+    "title": "Renew passport",
+    "ref": "ME-1"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-07T01:50:17.059Z"
+  },
+  {
+   "id": 24,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 1,
+   "projectId": 1,
+   "taskId": 1,
+   "data": {
+    "title": "Define color tokens and typography scale",
+    "ref": "WEB-1",
+    "minutes": 120,
+    "date": "2026-10-08",
+    "note": "Token naming workshop"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-08T17:30:00.000Z"
+  },
+  {
+   "id": 25,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 9,
+   "projectId": 1,
+   "taskId": 9,
+   "data": {
+    "title": "Proofread About and Team pages",
+    "ref": "WEB-9"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-09T01:42:17.059Z"
+  },
+  {
+   "id": 26,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 13,
+   "projectId": 1,
+   "taskId": 13,
+   "data": {
+    "title": "Add a performance budget to CI",
+    "ref": "WEB-13"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-10T01:38:17.059Z"
+  },
+  {
+   "id": 27,
+   "action": "task.updated",
+   "entityType": "task",
+   "entityId": 1,
+   "projectId": 1,
+   "taskId": 1,
+   "data": {
+    "changes": [
+     {
+      "field": "status",
+      "from": 2,
+      "to": 5,
+      "fromLabel": "Todo",
+      "toLabel": "Done"
+     }
+    ],
+    "title": "Define color tokens and typography scale",
+    "ref": "WEB-1"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-10T01:50:17.059Z"
+  },
+  {
+   "id": 28,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 14,
+   "projectId": 1,
+   "taskId": 14,
+   "data": {
+    "title": "Choose a privacy-friendly analytics setup",
+    "ref": "WEB-14"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-11T01:37:17.059Z"
+  },
+  {
+   "id": 29,
+   "action": "task.updated",
+   "entityType": "task",
+   "entityId": 21,
+   "projectId": 2,
+   "taskId": 21,
+   "data": {
+    "changes": [
+     {
+      "field": "status",
+      "from": 2,
+      "to": 5,
+      "fromLabel": "Todo",
+      "toLabel": "Done"
+     }
+    ],
+    "title": "File tax return",
+    "ref": "ME-4"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-11T01:47:17.059Z"
+  },
+  {
+   "id": 30,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 6,
+   "projectId": 2,
+   "taskId": 21,
+   "data": {
+    "title": "File tax return",
+    "ref": "ME-4",
+    "minutes": 60,
+    "date": "2026-10-11",
+    "note": "Filled in the forms"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-11T17:30:00.000Z"
+  },
+  {
+   "id": 31,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 15,
+   "projectId": 1,
+   "taskId": 15,
+   "data": {
+    "title": "Define the key conversion events",
+    "ref": "WEB-15"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-12T01:36:17.059Z"
+  },
+  {
+   "id": 32,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 16,
+   "projectId": 1,
+   "taskId": 16,
+   "data": {
+    "title": "Contact form sends duplicate emails",
+    "ref": "WEB-16"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-13T01:35:17.059Z"
+  },
+  {
+   "id": 33,
+   "action": "task.updated",
+   "entityType": "task",
+   "entityId": 10,
+   "projectId": 1,
+   "taskId": 10,
+   "data": {
+    "changes": [
+     {
+      "field": "status",
+      "from": 2,
+      "to": 6,
+      "fromLabel": "Todo",
+      "toLabel": "Cancelled"
+     }
+    ],
+    "title": "Merge duplicate press-release pages",
+    "ref": "WEB-10"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-13T01:41:17.059Z"
+  },
+  {
+   "id": 34,
+   "action": "comment.created",
+   "entityType": "comment",
+   "entityId": 5,
+   "projectId": 1,
+   "taskId": 10,
+   "data": {
+    "title": "Merge duplicate press-release pages",
+    "ref": "WEB-10",
+    "excerpt": "Not needed — the old press section is being dropped entirely."
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-13T01:41:17.059Z"
+  },
+  {
+   "id": 35,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 2,
+   "projectId": 1,
+   "taskId": 2,
+   "data": {
+    "title": "Build button, input and select components",
+    "ref": "WEB-2",
+    "minutes": 180,
+    "date": "2026-10-13",
+    "note": "Buttons and text inputs"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-13T17:30:00.000Z"
+  },
+  {
+   "id": 36,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 12,
+   "projectId": 1,
+   "taskId": 12,
+   "data": {
+    "title": "Hero image causes layout shift on mobile",
+    "ref": "WEB-12"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-14T01:39:17.059Z"
+  },
+  {
+   "id": 37,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 3,
+   "projectId": 1,
+   "taskId": 2,
+   "data": {
+    "title": "Build button, input and select components",
+    "ref": "WEB-2",
+    "minutes": 90,
+    "date": "2026-10-14",
+    "note": "Select component and tests"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-14T17:30:00.000Z"
+  },
+  {
+   "id": 38,
+   "action": "comment.created",
+   "entityType": "comment",
+   "entityId": 3,
+   "projectId": 1,
+   "taskId": 7,
+   "data": {
+    "title": "Migrate blog posts to Markdown",
+    "ref": "WEB-7",
+    "excerpt": "Blocked on the CMS export — IT promised it for Thursday."
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-15T01:44:17.059Z"
+  },
+  {
+   "id": 39,
+   "action": "task.updated",
+   "entityType": "task",
+   "entityId": 2,
+   "projectId": 1,
+   "taskId": 2,
+   "data": {
+    "changes": [
+     {
+      "field": "status",
+      "from": 2,
+      "to": 5,
+      "fromLabel": "Todo",
+      "toLabel": "Done"
+     }
+    ],
+    "title": "Build button, input and select components",
+    "ref": "WEB-2"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-15T01:49:17.059Z"
+  },
+  {
+   "id": 40,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 19,
+   "projectId": 2,
+   "taskId": 19,
+   "data": {
+    "title": "Book dentist appointment",
+    "ref": "ME-2"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-15T01:49:17.059Z"
+  },
+  {
+   "id": 41,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 4,
+   "projectId": 1,
+   "taskId": 4,
+   "data": {
+    "title": "Focus ring missing in Safari",
+    "ref": "WEB-4"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-16T01:47:17.059Z"
+  },
+  {
+   "id": 42,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 20,
+   "projectId": 2,
+   "taskId": 20,
+   "data": {
+    "title": "Plan a weekend hiking trip",
+    "ref": "ME-3"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-16T01:48:17.059Z"
+  },
+  {
+   "id": 43,
+   "action": "comment.created",
+   "entityType": "comment",
+   "entityId": 2,
+   "projectId": 1,
+   "taskId": 4,
+   "data": {
+    "title": "Focus ring missing in Safari",
+    "ref": "WEB-4",
+    "excerpt": "Reproducible in Safari 17 with keyboard navigation only; mouse focus is fine."
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-17T01:47:17.059Z"
+  },
+  {
+   "id": 44,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 5,
+   "projectId": 1,
+   "taskId": 7,
+   "data": {
+    "title": "Migrate blog posts to Markdown",
+    "ref": "WEB-7",
+    "minutes": 150,
+    "date": "2026-10-17",
+    "note": "Migrated the first batch of posts"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-17T17:30:00.000Z"
+  },
+  {
+   "id": 45,
+   "action": "comment.created",
+   "entityType": "comment",
+   "entityId": 4,
+   "projectId": 1,
+   "taskId": 7,
+   "data": {
+    "title": "Migrate blog posts to Markdown",
+    "ref": "WEB-7",
+    "excerpt": "Exported 40 of 120 posts; the rest have embedded galleries."
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-18T01:44:17.059Z"
+  },
+  {
+   "id": 46,
+   "action": "comment.created",
+   "entityType": "comment",
+   "entityId": 1,
+   "projectId": 1,
+   "taskId": 3,
+   "data": {
+    "title": "Dark mode for all components",
+    "ref": "WEB-3",
+    "excerpt": "Muted text in dark mode needs another contrast pass — see the card footer."
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-18T01:48:17.059Z"
+  },
+  {
+   "id": 47,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 4,
+   "projectId": 1,
+   "taskId": 4,
+   "data": {
+    "title": "Focus ring missing in Safari",
+    "ref": "WEB-4",
+    "minutes": 45,
+    "date": "2026-10-19",
+    "note": "Investigated :focus-visible behaviour"
+   },
+   "actorId": 1,
+   "createdAt": "2026-10-19T01:49:17.059Z"
+  },
+  {
+   "id": 48,
+   "action": "comment.created",
+   "entityType": "comment",
+   "entityId": 6,
+   "projectId": 1,
+   "taskId": 2,
+   "data": {
+    "title": "Build button, input and select components",
+    "ref": "WEB-2",
+    "excerpt": "Bob was here"
+   },
+   "actorId": 2,
+   "createdAt": "2026-10-19T01:50:17.236Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  },
+  {
+   "id": 49,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 7,
+   "projectId": 1,
+   "taskId": 3,
+   "data": {
+    "title": "Dark mode for all components",
+    "ref": "WEB-3",
+    "minutes": 45,
+    "date": "2026-10-01",
+    "note": "Bob"
+   },
+   "actorId": 2,
+   "createdAt": "2026-10-19T01:50:17.240Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  },
+  {
+   "id": 50,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 22,
+   "projectId": 1,
+   "taskId": 22,
+   "data": {
+    "title": "Bob's task",
+    "ref": "WEB-18"
+   },
+   "actorId": 2,
+   "createdAt": "2026-10-19T01:50:17.242Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  },
+  {
+   "id": 51,
+   "action": "comment.created",
+   "entityType": "comment",
+   "entityId": 7,
+   "projectId": 1,
+   "taskId": 2,
+   "data": {
+    "title": "Build button, input and select components",
+    "ref": "WEB-2",
+    "excerpt": "Carol was here"
+   },
+   "actorId": -1,
+   "createdAt": "2026-10-19T01:50:17.244Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  },
+  {
+   "id": 52,
+   "action": "worklog.created",
+   "entityType": "worklog",
+   "entityId": 8,
+   "projectId": 1,
+   "taskId": 3,
+   "data": {
+    "title": "Dark mode for all components",
+    "ref": "WEB-3",
+    "minutes": 45,
+    "date": "2026-10-01",
+    "note": "Carol"
+   },
+   "actorId": -1,
+   "createdAt": "2026-10-19T01:50:17.245Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  },
+  {
+   "id": 53,
+   "action": "task.created",
+   "entityType": "task",
+   "entityId": 23,
+   "projectId": 1,
+   "taskId": 23,
+   "data": {
+    "title": "Carol's task",
+    "ref": "WEB-19"
+   },
+   "actorId": -1,
+   "createdAt": "2026-10-19T01:50:17.246Z",
+   "importedBy": 1,
+   "importedAt": "2026-10-19T01:50:17.290Z"
+  }
+ ],
+ "boards": [
+  {
+   "id": 1,
+   "projectId": null,
+   "name": "All tasks",
+   "description": "Every open task across all projects, grouped by status.",
+   "config": {
+    "version": 1,
+    "layout": "kanban",
+    "filter": {
+     "closedWithinDays": 14
+    },
+    "sort": {
+     "field": "manual",
+     "dir": "asc"
+    },
+    "columns": {
+     "groupBy": "status",
+     "prefs": {},
+     "showEmpty": true,
+     "showNone": true,
+     "custom": [],
+     "showUnmatched": true
+    },
+    "swimlanes": {
+     "groupBy": "none",
+     "prefs": {},
+     "showEmpty": false,
+     "showNone": true,
+     "custom": [],
+     "showUnmatched": true
+    },
+    "card": {
+     "density": "comfortable",
+     "colorBy": "none",
+     "fields": {
+      "ref": true,
+      "project": true,
+      "milestone": false,
+      "epic": true,
+      "status": false,
+      "tags": true,
+      "priority": true,
+      "dueDate": true,
+      "startDate": false,
+      "estimate": false,
+      "commentCount": true,
+      "worklog": false,
+      "description": false
+     }
+    }
+   },
+   "position": 0,
+   "createdAt": "2026-10-19T01:50:17.056Z",
+   "updatedAt": "2026-10-19T01:50:17.056Z"
+  },
+  {
+   "id": 3,
+   "projectId": null,
+   "name": "Priority triage",
+   "description": "Everything open across projects by priority; closed tasks hide after 7 days.",
+   "config": {
+    "version": 1,
+    "layout": "kanban",
+    "filter": {
+     "closedWithinDays": 7
+    },
+    "sort": {
+     "field": "manual",
+     "dir": "asc"
+    },
+    "columns": {
+     "groupBy": "priority",
+     "prefs": {},
+     "showEmpty": true,
+     "showNone": true,
+     "custom": [],
+     "showUnmatched": true
+    },
+    "swimlanes": {
+     "groupBy": "project",
+     "prefs": {},
+     "showEmpty": false,
+     "showNone": true,
+     "custom": [],
+     "showUnmatched": true
+    },
+    "card": {
+     "density": "comfortable",
+     "colorBy": "project",
+     "fields": {
+      "ref": true,
+      "project": true,
+      "milestone": false,
+      "epic": true,
+      "status": false,
+      "tags": true,
+      "priority": true,
+      "dueDate": true,
+      "startDate": false,
+      "estimate": false,
+      "commentCount": true,
+      "worklog": false,
+      "description": false
+     }
+    }
+   },
+   "position": 1,
+   "createdAt": "2026-10-19T01:49:17.059Z",
+   "updatedAt": "2026-10-19T01:49:17.059Z"
+  },
+  {
+   "id": 2,
+   "projectId": 1,
+   "name": "WEB board",
+   "description": "Status columns with one lane per epic.",
+   "config": {
+    "version": 1,
+    "layout": "kanban",
+    "filter": {
+     "projectIds": [
+      1
+     ],
+     "closedWithinDays": 14
+    },
+    "sort": {
+     "field": "manual",
+     "dir": "asc"
+    },
+    "columns": {
+     "groupBy": "status",
+     "prefs": {},
+     "showEmpty": true,
+     "showNone": true,
+     "custom": [],
+     "showUnmatched": true
+    },
+    "swimlanes": {
+     "groupBy": "epic",
+     "prefs": {},
+     "showEmpty": false,
+     "showNone": true,
+     "custom": [],
+     "showUnmatched": true
+    },
+    "card": {
+     "density": "comfortable",
+     "colorBy": "none",
+     "fields": {
+      "ref": true,
+      "project": false,
+      "milestone": false,
+      "epic": false,
+      "status": false,
+      "tags": true,
+      "priority": true,
+      "dueDate": true,
+      "startDate": false,
+      "estimate": false,
+      "commentCount": true,
+      "worklog": false,
+      "description": false
+     }
+    }
+   },
+   "position": 0,
+   "createdAt": "2026-10-19T01:49:17.059Z",
+   "updatedAt": "2026-10-19T01:49:17.059Z"
+  }
+ ]
+}

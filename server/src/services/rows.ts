@@ -1,9 +1,21 @@
-// Row shapes of every table in db/schema.ts, exactly as node:sqlite returns them
-// (snake_case columns; INTEGER/REAL -> number; TEXT -> string; NULL -> null).
+// Row shapes of every table of a space's database (space/schema.ts), exactly as the Db returns them
+// (snake_case columns; INTEGER/REAL -> number; TEXT -> string; NULL -> null). *_fold columns hold
+// fold(value) of their column (core/fold.ts, design §3.4): every write of the column writes its fold.
 
 import type { EpicStatus, MilestoneStatus, Priority, ProjectStatus, StatusCategory } from '@shared/constants';
 
-export type { SessionRow, UserRow } from '../auth/sessions';
+/** The users mirror (design §3.5): a directory account (id > 0) or an import's placeholder (id < 0). */
+export interface MirrorUserRow {
+  id: number;
+  kind: 'account' | 'placeholder';
+  display_name: string;
+  /** Accounts only; null after the account was deleted. */
+  email: string | null;
+  is_member: number;
+  /** The directory account no longer exists. */
+  deleted: number;
+  updated_at: string;
+}
 
 export interface SettingRow {
   key: string;
@@ -15,7 +27,9 @@ export interface ProjectRow {
   id: number;
   key: string;
   name: string;
+  name_fold: string;
   description: string;
+  description_fold: string;
   color: string;
   status: ProjectStatus;
   position: number;
@@ -29,7 +43,9 @@ export interface MilestoneRow {
   id: number;
   project_id: number;
   name: string;
+  name_fold: string;
   description: string;
+  description_fold: string;
   status: MilestoneStatus;
   start_date: string | null;
   due_date: string | null;
@@ -44,7 +60,9 @@ export interface EpicRow {
   project_id: number;
   milestone_id: number | null;
   name: string;
+  name_fold: string;
   description: string;
+  description_fold: string;
   color: string;
   status: EpicStatus;
   start_date: string | null;
@@ -58,6 +76,7 @@ export interface EpicRow {
 export interface StatusRow {
   id: number;
   name: string;
+  name_fold: string;
   category: StatusCategory;
   color: string;
   position: number;
@@ -72,7 +91,9 @@ export interface TaskRow {
   epic_id: number | null;
   status_id: number;
   title: string;
+  title_fold: string;
   description: string;
+  description_fold: string;
   priority: Priority;
   start_date: string | null;
   due_date: string | null;
@@ -83,11 +104,17 @@ export interface TaskRow {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /** JSON array of the task's tag ids, ascending: kept from task_tags by triggers (space/schema.ts, migration 2). */
+  tag_ids: string;
+  /** Its comments, and the minutes of its work logs: kept by triggers (space/schema.ts, migration 3). */
+  comment_count: number;
+  worklog_minutes: number;
 }
 
 export interface TagRow {
   id: number;
   name: string;
+  name_fold: string;
   color: string;
   created_at: string;
   updated_at: string;
@@ -106,6 +133,9 @@ export interface CommentRow {
   created_at: string;
   updated_at: string;
   edited_at: string | null;
+  /** Import provenance (design §8.6): the importer, when the import attributed the row to someone else. */
+  imported_by: number | null;
+  imported_at: string | null;
 }
 
 export interface WorklogRow {
@@ -117,6 +147,8 @@ export interface WorklogRow {
   note: string;
   created_at: string;
   updated_at: string;
+  imported_by: number | null;
+  imported_at: string | null;
 }
 
 export interface ActivityRow {
@@ -130,6 +162,8 @@ export interface ActivityRow {
   /** JSON-encoded ActivityData. */
   data: string;
   created_at: string;
+  imported_by: number | null;
+  imported_at: string | null;
 }
 
 export interface BoardRow {
@@ -145,9 +179,11 @@ export interface BoardRow {
 }
 
 /**
- * Author columns joined onto comment / work-log rows:
- * `LEFT JOIN users u ON u.id = c.user_id` selecting `u.display_name AS author_name`.
+ * Author columns joined onto comment / work-log rows: `LEFT JOIN users u ON u.id = c.user_id` selecting
+ * `u.display_name AS author_name`, and `LEFT JOIN users ib ON ib.id = c.imported_by` selecting
+ * `ib.display_name AS imported_by_name`.
  */
 export interface AuthorJoin {
   author_name: string | null;
+  imported_by_name: string | null;
 }

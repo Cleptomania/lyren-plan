@@ -3,12 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
+import { spaceArchiveSchema } from '@shared/archive';
 import { CSRF_HEADER } from '@shared/constants';
-import { exportSchema, IMPORT_INT_MAX, type ExportInput } from '@shared/export';
-import type { BoardDTO, ExportDTO, StatusDTO, TagDTO } from '@shared/types';
-import { buildExport } from '../src/routes/data';
+import { IMPORT_INT_MAX, type ExportInput } from '@shared/export';
+import { DEFAULT_PREFERENCES } from '@shared/schemas';
+import type { BoardDTO, SpaceArchiveDTO, StatusDTO, TagDTO } from '@shared/types';
+import { extractBackupSet, openBackupSet } from '../src/runtime/node/backupSet';
 import { getBoard } from '../src/services/entities';
-import { createTestContext } from './helpers';
+import { createTestContext, type TestClient } from './helpers';
+import { archiveOf, comparableArchive, downloadArchive, importArchive, importForm, replaceImport } from './support/archive';
 
 const TS = '2026-01-01T00:00:00.000Z';
 
@@ -18,12 +21,17 @@ async function sampleSetup(overrides: Parameters<typeof createTestContext>[0] = 
   return { ...ctx, client, user };
 }
 
-/** Comparable export: exportedAt is the only field that legitimately differs between two exports. */
-const comparable = (e: ExportDTO) => ({ ...e, exportedAt: '' });
+/** The space's archive, downloaded and unpacked. */
+const exported = async (client: TestClient) => (await downloadArchive(client)).archive!;
 
+/** Import `file` over the space, its users mapped as the analysis suggests (a v1 file has none): what the web does. */
+const importOver = async (client: TestClient, file: unknown) => (await importArchive(client, { mode: 'replace', file })).commit;
+
+/** Every file under DATA_DIR/backups (pre-import snapshots are in backups/spaces/<id>/, §8.8). */
 function backupsIn(dataDir: string): string[] {
   const dir = path.join(dataDir, 'backups');
-  return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  if (!fs.existsSync(dir)) return [];
+  return (fs.readdirSync(dir, { recursive: true }) as string[]).filter((f) => fs.statSync(path.join(dir, f)).isFile());
 }
 
 /** A small hand-written export exercising the import fix-ups. */
@@ -99,16 +107,20 @@ function handExport(): ExportInput {
 }
 
 describe('GET /api/data/export', () => {
-  it('exports every table as a valid ExportDTO attachment without internal settings', async () => {
-    const { client, db, user } = await sampleSetup();
-    const res = await client.get<ExportDTO>('/api/data/export');
+  it('exports every table as a gzip archive v2 attachment without internal settings or derived columns', async () => {
+    const { client, db, user, spaceId } = await sampleSetup();
+    const res = await downloadArchive(client);
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="lyren-export-\d{4}-\d\d-\d\d\.json"$/);
-    expect(res.headers.get('content-type')).toMatch(/application\/json/);
-    const e = res.body;
-    expect(exportSchema.safeParse(e).success).toBe(true);
-    expect(e).toMatchObject({ format: 'lyren-plan-export', formatVersion: 1 });
-    expect(Object.keys(e.settings).sort()).toEqual(['defaultBoardId', 'estimateUnit', 'homePage', 'weekStartsOn']);
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="lyren-space-owner-s-space-\d{4}-\d\d-\d\d\.json\.gz"$/);
+    expect(res.headers.get('content-type')).toBe('application/gzip');
+    expect(res.headers.get('content-encoding')).toBeNull();
+    expect(Number(res.headers.get('content-length'))).toBe(res.bytes.length);
+    expect([...res.bytes.slice(0, 2)]).toEqual([0x1f, 0x8b]);
+    const e = res.archive!;
+    expect(spaceArchiveSchema.safeParse(e).success).toBe(true);
+    expect(e).toMatchObject({ format: 'lyren-plan-space', formatVersion: 2, space: { id: spaceId, name: "Owner's space", exportedBy: user.id } });
+    expect(e.users).toEqual([{ id: user.id, kind: 'account', displayName: 'Owner', email: 'owner@example.com' }]);
+    expect(Object.keys(e.settings).sort()).toEqual(['defaultBoardId', 'estimateUnit']);
 
     const count = (table: string) => db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)!.n;
     expect(e.statuses).toHaveLength(count('statuses'));
@@ -120,6 +132,11 @@ describe('GET /api/data/export', () => {
     expect(e.activity).toHaveLength(count('activity'));
     expect(e.boards).toHaveLength(count('boards'));
     expect(e.statuses[0]).not.toHaveProperty('taskCount');
+    expect(Object.keys(e.tasks[0]!)).not.toEqual(expect.arrayContaining(['tagIdsJson']));
+    for (const derived of ['tag_ids', 'tagIdsText', 'commentCount', 'worklogMinutes', 'titleFold', 'title_fold']) {
+      expect(e.tasks[0]).not.toHaveProperty(derived);
+    }
+    expect(e.projects[0]).not.toHaveProperty('nameFold');
 
     const web = e.projects.find((p) => p.key === 'WEB')!;
     expect(web.taskCounter).toBe(Math.max(...e.tasks.filter((t) => t.projectId === web.id).map((t) => t.number)));
@@ -127,53 +144,68 @@ describe('GET /api/data/export', () => {
     expect(e.boards.find((b) => b.name === 'Priority triage')!.projectId).toBeNull();
     const taggedTasks = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM task_tags')!.n;
     expect(e.tasks.reduce((n, t) => n + t.tagIds.length, 0)).toBe(taggedTasks);
-    expect(e.comments.every((cm) => cm.authorId === user.id)).toBe(true);
+    expect(e.comments.every((cm) => cm.authorId === user.id && !('importedBy' in cm))).toBe(true);
     expect(e.activity.every((a) => typeof a.data === 'object' && a.actorId === user.id)).toBe(true);
+    // Ids in id order, statuses and boards in their v1 order.
+    expect(e.tasks.map((t) => t.id)).toEqual([...e.tasks.map((t) => t.id)].sort((a, b) => a - b));
   });
 
   it('requires a session', async () => {
-    const { app } = await sampleSetup();
-    expect((await app.request('/api/data/export')).status).toBe(401);
+    const { app, path: spacePath } = await sampleSetup();
+    expect((await app.request(spacePath('/api/data/export'))).status).toBe(401);
   });
 });
 
-describe('GET /api/data/backup', () => {
+// §7.3, §9.5: GET /api/data/backup is gone; instance admins download a backup set of the directory and
+// every space from GET /api/admin/backup (a tar of SQLite snapshots, runtime/node/backupSet.ts).
+describe('GET /api/admin/backup', () => {
   async function download(ctx: Awaited<ReturnType<typeof sampleSetup>>) {
-    return ctx.app.request('/api/data/backup', { headers: { Cookie: ctx.client.cookie!, [CSRF_HEADER]: '1' } });
+    return ctx.app.request('/api/admin/backup', { headers: { Cookie: ctx.client.cookie!, [CSRF_HEADER]: '1' } });
   }
 
-  it('streams a consistent SQLite snapshot without sessions and removes the temp file', async () => {
+  /** The downloaded set in a temporary folder: the tar, and its databases extracted next to it. */
+  function unpack(bytes: Uint8Array) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lyren-backup-test-'));
+    const file = path.join(dir, 'set.tar');
+    fs.writeFileSync(file, bytes);
+    const set = openBackupSet(file);
+    extractBackupSet(set, path.join(dir, 'out'));
+    return { dir, set, out: path.join(dir, 'out') };
+  }
+
+  it('streams consistent SQLite snapshots without sessions and removes the temp file', async () => {
     const ctx = await sampleSetup();
     const res = await download(ctx);
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('application/vnd.sqlite3');
-    expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="lyren-backup-\d{4}-\d\d-\d\d\.db"$/);
-    const bytes = Buffer.from(await res.arrayBuffer());
+    expect(res.headers.get('content-type')).toBe('application/x-tar');
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="lyren-backup-\d{4}-\d\d-\d\d\.tar"$/);
+    const bytes = new Uint8Array(await res.arrayBuffer());
     expect(Number(res.headers.get('content-length'))).toBe(bytes.length);
-    expect(bytes.subarray(0, 15).toString('latin1')).toBe('SQLite format 3');
+    const { dir, set, out } = unpack(bytes);
+    expect(set.manifest.spaces.map((s) => s.file)).toEqual([`spaces/${ctx.spaceId}.db`]);
 
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lyren-backup-test-'));
-    const file = path.join(dir, 'copy.db');
-    fs.writeFileSync(file, bytes);
-    const copy = new DatabaseSync(file);
+    const directory = new DatabaseSync(path.join(out, 'directory.db'));
+    const space = new DatabaseSync(path.join(out, 'spaces', `${ctx.spaceId}.db`));
     try {
-      const n = (sql: string) => Number((copy.prepare(sql).get() as { n: number }).n);
-      expect(n('SELECT COUNT(*) AS n FROM sessions')).toBe(0);
-      expect(n('SELECT COUNT(*) AS n FROM users')).toBe(1);
-      expect(n('SELECT COUNT(*) AS n FROM tasks')).toBe(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM tasks')!.n);
-      expect((copy.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode).toBe('delete');
+      const n = (db: DatabaseSync, sql: string) => Number((db.prepare(sql).get() as { n: number }).n);
+      expect(n(directory, 'SELECT COUNT(*) AS n FROM sessions')).toBe(0);
+      expect(n(directory, 'SELECT COUNT(*) AS n FROM users')).toBe(1);
+      expect(n(space, 'SELECT COUNT(*) AS n FROM tasks')).toBe(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM tasks')!.n);
+      expect((directory.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode).toBe('delete');
     } finally {
-      copy.close();
+      directory.close();
+      space.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
-    // The live database still has its session.
-    expect(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')!.n).toBe(1);
+    // The live directory still has its session.
+    expect(ctx.directoryDb.get<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')!.n).toBe(1);
     expect(fs.readdirSync(ctx.config.dataDir).filter((f) => f.startsWith('.backup-'))).toEqual([]);
   });
 
   it('leaves no temp file behind when the download is aborted', async () => {
     const ctx = await sampleSetup();
     const res = await download(ctx);
+    expect(res.status).toBe(200);
     const reader = res.body!.getReader();
     await reader.read();
     await reader.cancel();
@@ -182,8 +214,11 @@ describe('GET /api/data/backup', () => {
   });
 
   it('requires a session', async () => {
-    const { app } = await sampleSetup();
-    expect((await app.request('/api/data/backup')).status).toBe(401);
+    const ctx = await sampleSetup();
+    expect((await ctx.app.request('/api/admin/backup')).status).toBe(401);
+    // §7.2: and an instance admin.
+    const { client } = await ctx.addUser({ email: 'member@example.com' });
+    expect((await client.get('/api/admin/backup')).status).toBe(403);
   });
 
   it('answers HEAD with headers only, without taking (and leaking) a snapshot', async () => {
@@ -199,14 +234,14 @@ describe('GET /api/data/backup', () => {
       }).length;
     };
     const fdsBefore = openBackups();
-    const backupTo = vi.spyOn(ctx.db, 'backupTo');
+    const backupTo = vi.spyOn(ctx.directoryDb, 'backupTo');
     for (let i = 0; i < 3; i++) {
-      const res = await ctx.app.request('/api/data/backup', {
+      const res = await ctx.app.request('/api/admin/backup', {
         method: 'HEAD',
         headers: { Cookie: ctx.client.cookie!, [CSRF_HEADER]: '1' },
       });
       expect(res.status).toBe(200);
-      expect(res.headers.get('content-type')).toBe('application/vnd.sqlite3');
+      expect(res.headers.get('content-type')).toBe('application/x-tar');
       expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="lyren-backup-/);
       expect(await res.text()).toBe('');
     }
@@ -217,14 +252,16 @@ describe('GET /api/data/backup', () => {
     // GET still streams a snapshot.
     backupTo.mockRestore();
     const get = await download(ctx);
-    expect(Buffer.from(await get.arrayBuffer()).subarray(0, 15).toString('latin1')).toBe('SQLite format 3');
+    const { dir, set } = unpack(new Uint8Array(await get.arrayBuffer()));
+    expect(set.manifest.format).toBe('lyren-plan-backup');
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 
-describe('POST /api/data/import', () => {
+describe('POST /api/data/import/commit?mode=replace', () => {
   it('round-trips: export → mutate → import the export → export again is identical', async () => {
-    const { client, db, config, user } = await sampleSetup();
-    const e1 = (await client.get<ExportDTO>('/api/data/export')).body;
+    const { client, db, config, user, spaceId } = await sampleSetup();
+    const e1 = await exported(client);
 
     // Mutate through the API and directly.
     const tags = (await client.get<TagDTO[]>('/api/tags')).body;
@@ -233,14 +270,14 @@ describe('POST /api/data/import', () => {
     await client.delete(`/api/tags/${tags[0]!.id}`);
     await client.patch(`/api/statuses/${statuses[1]!.id}`, { name: 'Renamed', category: 'completed' });
     await client.post('/api/statuses/reorder', { ids: statuses.map((s) => s.id).reverse() });
-    await client.patch('/api/settings', { weekStartsOn: 0, estimateUnit: 'hours' });
+    await client.patch('/api/settings', { estimateUnit: 'hours' }); // weekStartsOn is a preference now (§3.6)
     db.run('DELETE FROM tasks WHERE id = (SELECT MIN(id) FROM tasks)');
     db.run("UPDATE projects SET name = 'Changed', task_counter = 999");
     db.run('DELETE FROM boards WHERE project_id IS NOT NULL');
     db.run("UPDATE tasks SET rank = 'a0' WHERE id = (SELECT MAX(id) FROM tasks)");
-    expect(comparable((await client.get<ExportDTO>('/api/data/export')).body)).not.toEqual(comparable(e1));
+    expect(comparableArchive(await exported(client))).not.toEqual(comparableArchive(e1));
 
-    const res = await client.post('/api/data/import', e1);
+    const res = await replaceImport(client, e1, { gzip: true, mapping: { mapping: [{ archiveId: user.id, target: { kind: 'user', userId: user.id } }] } });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.counts).toEqual({
@@ -256,12 +293,14 @@ describe('POST /api/data/import', () => {
       boards: e1.boards.length,
     });
 
-    const e2 = (await client.get<ExportDTO>('/api/data/export')).body;
-    expect(comparable(e2)).toEqual(comparable(e1));
+    const e2 = await exported(client);
+    expect(comparableArchive(e2)).toEqual(comparableArchive(e1));
 
-    // The safety snapshot holds the state from just before the import.
-    expect(res.body.backupFile).toMatch(/^backups\/pre-import-.*\.db$/);
-    const snapshot = new DatabaseSync(path.join(config.dataDir, res.body.backupFile), { readOnly: true });
+    // The safety snapshot holds the state from just before the import (one folder per space, §8.8).
+    const { path: backupFile, restoreCommand } = res.body.safety;
+    expect(backupFile).toMatch(new RegExp(`^backups/spaces/${spaceId}/pre-import-.*\\.db$`));
+    expect(restoreCommand).toBe(`restore "${backupFile}"`);
+    const snapshot = new DatabaseSync(path.join(config.dataDir, backupFile), { readOnly: true });
     try {
       expect(snapshot.prepare("SELECT COUNT(*) AS n FROM tags WHERE name = 'brand new'").get()).toEqual({ n: 1 });
     } finally {
@@ -269,10 +308,10 @@ describe('POST /api/data/import', () => {
     }
 
     // The account and its session survived.
-    expect((await client.get('/api/auth/me')).body.id).toBe(user.id);
+    expect((await client.get('/api/account')).body.id).toBe(user.id);
     // Importing the same data again is stable.
-    expect((await client.post('/api/data/import', e2)).status).toBe(200);
-    expect(comparable((await client.get<ExportDTO>('/api/data/export')).body)).toEqual(comparable(e1));
+    expect((await replaceImport(client, e2, { mapping: { mapping: [{ archiveId: user.id, target: { kind: 'user', userId: user.id } }] } })).status).toBe(200);
+    expect(comparableArchive(await exported(client))).toEqual(comparableArchive(e1));
     expect(backupsIn(config.dataDir)).toHaveLength(2);
   });
 
@@ -280,15 +319,16 @@ describe('POST /api/data/import', () => {
     const ctx = createTestContext();
     const { client, user } = await ctx.signedIn({ password: 'importer-pass' });
     const second = ctx.client();
-    expect((await second.post('/api/auth/login', { username: 'owner', password: 'importer-pass' })).status).toBe(200);
-    const sessionsBefore = ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')!.n;
+    expect((await second.post('/api/auth/login', { identifier: 'owner@example.com', password: 'importer-pass' })).status).toBe(200);
+    // Accounts and sessions live in the directory (§3.2), which a space import never touches.
+    const sessionsBefore = ctx.directoryDb.get<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')!.n;
 
-    const res = await client.post('/api/data/import', handExport());
+    const res = await importOver(client, handExport());
     expect(res.status).toBe(200);
     expect(res.body.counts).toMatchObject({ tasks: 3, activity: 2, boards: 2, comments: 1 });
 
-    expect(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')!.n).toBe(sessionsBefore);
-    expect((await second.get('/api/auth/me')).status).toBe(200);
+    expect(ctx.directoryDb.get<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')!.n).toBe(sessionsBefore);
+    expect((await second.get('/api/account')).status).toBe(200);
     expect(ctx.db.get("SELECT value FROM settings WHERE key = '_seeded'")).toBeDefined();
     expect(ctx.db.all<{ created_by: number | null }>('SELECT created_by FROM tasks ORDER BY id').map((r) => r.created_by)).toEqual([
       user.id,
@@ -304,7 +344,7 @@ describe('POST /api/data/import', () => {
   it('applies the import fix-ups: completedAt, counters, ranks, tags, boards, settings, dangling activity', async () => {
     const ctx = createTestContext();
     const { client } = await ctx.signedIn();
-    const res = await client.post('/api/data/import', handExport());
+    const res = await importOver(client, handExport());
     expect(res.status).toBe(200);
     const { db } = ctx;
 
@@ -329,8 +369,10 @@ describe('POST /api/data/import', () => {
     expect(projectBoard.config.columns.groupBy).toBe('status');
     expect(getBoard(db, 9).config.columns.groupBy).toBe('status');
 
+    // Appendix D 16: the import stores the space's settings only; the account's preferences stay.
     const settings = (await client.get('/api/settings')).body;
-    expect(settings).toEqual({ weekStartsOn: 0, estimateUnit: 'hours', defaultBoardId: null, homePage: 'default_board' });
+    expect(settings).toEqual({ estimateUnit: 'hours', defaultBoardId: null });
+    expect((await client.get('/api/auth/status')).body.preferences).toEqual(DEFAULT_PREFERENCES);
     expect(db.all<{ id: number }>('SELECT id FROM activity ORDER BY id').map((a) => a.id)).toEqual([1, 4]);
     expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
 
@@ -339,21 +381,21 @@ describe('POST /api/data/import', () => {
     expect(boot.statuses.map((s: StatusDTO) => s.name)).toEqual(['Open', 'Shipped']);
     const tag = (await client.post<TagDTO>('/api/tags', { name: 'fresh' })).body;
     expect(tag.id).toBeGreaterThan(5);
-    expect(buildExport(db).tasks.find((t) => t.id === 100)!.tagIds).toEqual([5]);
+    expect(archiveOf(db).tasks.find((t) => t.id === 100)!.tagIds).toEqual([5]);
   });
 
   describe('rejections (400, nothing changed, no snapshot)', () => {
     async function expectRejected(payload: unknown, expectedPath?: string | RegExp) {
       const ctx = await sampleSetup();
-      const before = comparable(buildExport(ctx.db));
-      const res = await ctx.client.request('POST', '/api/data/import', typeof payload === 'string' ? payload : JSON.stringify(payload));
+      const before = comparableArchive(archiveOf(ctx.db));
+      const res = await importOver(ctx.client, payload);
       expect(res.status).toBe(400);
       expect(typeof res.body.error.message).toBe('string');
       if (expectedPath !== undefined) {
         const paths: string[] = res.body.error.details.map((d: { path: string }) => d.path);
         expect(paths.some((p) => (typeof expectedPath === 'string' ? p === expectedPath : expectedPath.test(p)))).toBe(true);
       }
-      expect(comparable(buildExport(ctx.db))).toEqual(before);
+      expect(comparableArchive(archiveOf(ctx.db))).toEqual(before);
       expect(backupsIn(ctx.config.dataDir)).toEqual([]);
       return res.body.error;
     }
@@ -410,34 +452,34 @@ describe('POST /api/data/import', () => {
 
   it('accepts files above the normal body limit up to the import limit', async () => {
     const big = await sampleSetup({ bodyLimit: 1024 });
-    const e = (await big.client.get<ExportDTO>('/api/data/export')).body;
+    const e = await exported(big.client);
     expect(JSON.stringify(e).length).toBeGreaterThan(1024);
-    expect((await big.client.post('/api/data/import', e)).status).toBe(200);
+    expect((await importOver(big.client, e)).status).toBe(200);
 
     const small = await sampleSetup({ importBodyLimit: 1024 });
-    const res = await small.client.post('/api/data/import', e);
+    const res = await importOver(small.client, e);
     expect(res.status).toBe(413);
     expect(backupsIn(small.config.dataDir)).toEqual([]);
   });
 
   it('requires a session and the CSRF header', async () => {
     const ctx = await sampleSetup();
-    const anon = await ctx.app.request('/api/data/import', {
+    const anon = await ctx.app.request(ctx.path('/api/data/import/commit?mode=replace'), {
       method: 'POST',
-      headers: { [CSRF_HEADER]: '1', 'Content-Type': 'application/json' },
-      body: JSON.stringify(handExport()),
+      headers: { [CSRF_HEADER]: '1' },
+      body: importForm(handExport()),
     });
     expect(anon.status).toBe(401);
-    const noCsrf = await ctx.client.request('POST', '/api/data/import', handExport(), { [CSRF_HEADER]: '' });
+    const noCsrf = await ctx.client.request('POST', '/api/data/import/commit?mode=replace', importForm(handExport()), { [CSRF_HEADER]: '' });
     expect(noCsrf.status).toBe(403);
   });
 });
 
-describe('POST /api/data/import: values the API relies on later', () => {
+describe('import: values the API relies on later', () => {
   async function setupWithTask() {
     const ctx = createTestContext();
     const { client, user } = await ctx.signedIn();
-    expect((await client.post('/api/data/import', handExport())).status).toBe(200);
+    expect((await importOver(client, handExport())).status).toBe(200);
     return { ...ctx, client, user };
   }
 
@@ -453,7 +495,7 @@ describe('POST /api/data/import: values the API relies on later', () => {
     e.epics[0]!.dueDate = '2026-07-01';
     e.worklogs.push({ id: 77, taskId: 100, date: '2026-05-01', minutes: 0, note: '  ', authorId: null, createdAt: TS, updatedAt: TS });
     e.worklogs.push({ id: 78, taskId: 100, date: '2026-05-01', minutes: null, note: '', authorId: 1, createdAt: TS, updatedAt: TS });
-    const res = await client.post('/api/data/import', e);
+    const res = await importOver(client, e);
     expect(res.status).toBe(400);
     expect(res.body.error.details.map((d: { path: string }) => d.path).sort()).toEqual(
       ['epics.0.dueDate', 'milestones.0.dueDate', 'tasks.0.dueDate', 'worklogs.1.note', 'worklogs.2.note'].sort(),
@@ -464,7 +506,7 @@ describe('POST /api/data/import: values the API relies on later', () => {
     ok.tasks[0]!.startDate = '2026-05-01';
     ok.tasks[0]!.dueDate = '2026-05-01';
     ok.worklogs.push({ id: 79, taskId: 100, date: '2026-05-01', minutes: null, note: 'notes only', authorId: null, createdAt: TS, updatedAt: TS });
-    expect((await client.post('/api/data/import', ok)).status).toBe(200);
+    expect((await importOver(client, ok)).status).toBe(200);
   });
 
   it('imported comments and work logs without an author stay editable', async () => {
@@ -472,7 +514,7 @@ describe('POST /api/data/import: values the API relies on later', () => {
     const { client, user } = await ctx.signedIn();
     const e = handExport();
     e.comments[0]!.authorId = null;
-    expect((await client.post('/api/data/import', e)).status).toBe(200);
+    expect((await importOver(client, e)).status).toBe(200);
     expect((await client.patch('/api/comments/1', { body: 'edited' })).status).toBe(200);
     expect((await client.patch('/api/worklogs/1', { date: '2026-01-02' })).status).toBe(200);
     expect((await client.delete('/api/worklogs/1')).status).toBe(200);
@@ -493,13 +535,13 @@ describe('POST /api/data/import: values the API relies on later', () => {
     ] as const) {
       const e = handExport();
       mutate(e);
-      const res = await client.post('/api/data/import', e);
+      const res = await importOver(client, e);
       expect(res.status, where).toBe(400);
       expect(res.body.error.details.map((d: { path: string }) => d.path), where).toContain(where);
     }
     const max = handExport();
     max.comments[0]!.id = IMPORT_INT_MAX;
-    expect((await client.post('/api/data/import', max)).status).toBe(200);
+    expect((await importOver(client, max)).status).toBe(200);
     const added = await client.post<{ id: number }>('/api/tasks/100/comments', { body: 'after a big id' });
     expect(added.status).toBe(201);
     expect(added.body.id).toBe(IMPORT_INT_MAX + 1);
@@ -509,14 +551,14 @@ describe('POST /api/data/import: values the API relies on later', () => {
   it('heals an AUTOINCREMENT counter that an older import pushed towards 2^53', async () => {
     const ctx = await setupWithTask();
     const { client, db } = ctx;
-    const good = (await client.get<ExportDTO>('/api/data/export')).body;
+    const good = await exported(client);
     // What an import of comments[0].id = 2^53 - 1 left behind before ids were capped.
     db.run(
       "INSERT INTO comments (id, task_id, user_id, body, created_at, updated_at) VALUES (:id, 100, :u, 'x', :t, :t)",
       { id: Number.MAX_SAFE_INTEGER, u: ctx.user.id, t: TS },
     );
     db.run('UPDATE sqlite_sequence SET seq = 9007199254740993 WHERE name = :n', { n: 'activity' });
-    expect((await client.post('/api/data/import', good)).status).toBe(200);
+    expect((await importOver(client, good)).status).toBe(200);
     expect(
       db.all<{ name: string; ok: number }>('SELECT name, seq < 1000000 AS ok FROM sqlite_sequence').every((r) => r.ok === 1),
     ).toBe(true);
@@ -531,9 +573,9 @@ describe('POST /api/data/import: values the API relies on later', () => {
   it('leaves normal counters alone: ids of deleted rows are still never reused', async () => {
     const ctx = await setupWithTask();
     const { client } = ctx;
-    const good = (await client.get<ExportDTO>('/api/data/export')).body;
+    const good = await exported(client);
     const first = await client.post<{ id: number }>('/api/tasks/100/comments', { body: 'later deleted' });
-    expect((await client.post('/api/data/import', good)).status).toBe(200);
+    expect((await importOver(client, good)).status).toBe(200);
     const next = await client.post<{ id: number }>('/api/tasks/100/comments', { body: 'new' });
     expect(next.body.id).toBeGreaterThan(first.body.id);
   });
@@ -547,11 +589,11 @@ describe('POST /api/data/import: values the API relies on later', () => {
     expect((await client.patch('/api/tasks/100', { addTagIds: tagIds.slice(100) })).status).toBe(200);
     // A rank left over from before ranks were kept short.
     db.run('UPDATE tasks SET rank = :rank WHERE id = 101', { rank: 'a' + '1'.repeat(400) });
-    const e = (await client.get<ExportDTO>('/api/data/export')).body;
+    const e = await exported(client);
     expect(e.tasks.find((t) => t.id === 100)!.tagIds).toHaveLength(120);
-    expect(exportSchema.safeParse(e).success).toBe(true);
-    expect((await client.post('/api/data/import', e)).status).toBe(200);
-    expect(buildExport(db).tasks.find((t) => t.id === 100)!.tagIds).toHaveLength(120);
+    expect(spaceArchiveSchema.safeParse(e).success).toBe(true);
+    expect((await importOver(client, e)).status).toBe(200);
+    expect(archiveOf(db).tasks.find((t) => t.id === 100)!.tagIds).toHaveLength(120);
   });
 
   it('rejects activity data that does not match ActivityData', async () => {
@@ -569,13 +611,13 @@ describe('POST /api/data/import: values the API relies on later', () => {
       [{ title: { evil: true } }, /^activity\.4\.data\.title$/],
       [{ excerpt: ['a'] }, /^activity\.4\.data\.excerpt$/],
     ] as const) {
-      const res = await client.post('/api/data/import', bad(data));
+      const res = await importOver(client, bad(data));
       expect(res.status, JSON.stringify(data)).toBe(400);
       expect(res.body.error.details.some((d: { path: string }) => where.test(d.path)), JSON.stringify(res.body.error.details)).toBe(true);
     }
     // Well-formed data with extra keys is fine.
     const ok = bad({ changes: [{ field: 'tags', added: ['a'], removed: [] }, { field: 'status', from: 1, to: 2, fromLabel: 'A', toLabel: null }], title: 'T', extra: { any: 1 } });
-    expect((await client.post('/api/data/import', ok)).status).toBe(200);
+    expect((await importOver(client, ok)).status).toBe(200);
   });
 
   it('repairs malformed stored activity data when reading and exporting it', async () => {
@@ -596,8 +638,8 @@ describe('POST /api/data/import: values the API relies on later', () => {
     const feed = await client.get<{ items: Array<{ data: Record<string, unknown> }> }>('/api/activity?taskId=100&limit=1');
     expect(feed.status).toBe(200);
     expect(feed.body.items[0]!.data).toEqual({ changes: [{ field: 'priority', from: 1, to: 2 }], ref: 'AB-7' });
-    const e = (await client.get<ExportDTO>('/api/data/export')).body;
-    expect(exportSchema.safeParse(e).success).toBe(true);
-    expect((await client.post('/api/data/import', e)).status).toBe(200);
+    const e = await exported(client);
+    expect(spaceArchiveSchema.safeParse(e).success).toBe(true);
+    expect((await importOver(client, e)).status).toBe(200);
   });
 });

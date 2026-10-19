@@ -8,6 +8,7 @@ import { projectCreateInput, projectUpdateInput, type ProjectUpdateInput } from 
 import type { ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
 import { useCreateProject, useUpdateProject } from '../../api/projects';
+import { useSpaceId } from '../../app/space';
 import {
   Button,
   ColorPicker,
@@ -56,6 +57,7 @@ function initialState(project: ProjectDTO | undefined): FormState {
 const STATUS_OPTIONS = PROJECT_STATUSES.map((s) => ({ value: s, label: PROJECT_STATUS_LABELS[s] }));
 
 export function ProjectFormDialog({ open, onClose, project }: ProjectFormDialogProps) {
+  const sid = useSpaceId();
   const { projects } = useLookups();
   const navigate = useNavigate();
   const create = useCreateProject();
@@ -114,7 +116,7 @@ export function ProjectFormDialog({ open, onClose, project }: ProjectFormDialogP
           // On phones the dialog has its own history entry: the project page replaces it.
           const replace = controls.current?.closeForNavigation() ?? false;
           onClose();
-          navigate(projectUrl(created.id), { replace });
+          navigate(projectUrl(sid, created.id), { replace });
         },
         onError: fail,
       });

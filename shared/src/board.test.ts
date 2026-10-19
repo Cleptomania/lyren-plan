@@ -4,6 +4,7 @@ import {
   boardConfigSchema,
   customGroupKey,
   defaultBoardConfig,
+  IMPORT_REPAIR_COLUMNS,
   parseBoardConfigLenient,
   remapBoardConfigIds,
   resolveDropPatch,
@@ -63,6 +64,32 @@ describe('board config', () => {
     expect(cfg.columns.groupBy).toBe('priority');
     expect(cfg.columns.custom.map((c) => c.id)).toEqual(['ok']);
     expect(parseBoardConfigLenient('garbage').columns.groupBy).toBe('status');
+  });
+
+  it('lenient parsing keeps an axis whose prefs name fields it does not have, and gives up on a long custom list', () => {
+    const order = { order: ['3'], hidden: [], collapsed: [], wipLimits: {} };
+    const cfg = parseBoardConfigLenient({
+      columns: { groupBy: 'tag', prefs: { tag: { order: ['3'] }, bogus: {}, none: { order: ['1'] } } },
+      swimlanes: { groupBy: 'custom', custom: [...Array(199).fill({}), { id: 'x', name: 'X' }] },
+    });
+    expect(cfg.columns.groupBy).toBe('tag');
+    expect(cfg.columns.prefs).toEqual({ tag: order });
+    expect(cfg.swimlanes.custom.map((c) => c.id)).toEqual(['x']);
+    const long = parseBoardConfigLenient({ swimlanes: { groupBy: 'custom', custom: [...Array(200).fill({}), { id: 'x', name: 'X' }] } });
+    expect(long.swimlanes).toEqual(defaultBoardConfig().swimlanes);
+  });
+
+  it("an import's boards share one repair budget: once it is spent, an axis that needs repairs gets its defaults", () => {
+    const broken = { layout: 'list', columns: { groupBy: 'custom', custom: [...Array(199).fill({}), { id: 'x', name: 'X' }] } };
+    const budget = { columns: IMPORT_REPAIR_COLUMNS };
+    const parsed = Array.from({ length: IMPORT_REPAIR_COLUMNS / 200 + 2 }, () => parseBoardConfigLenient(broken, budget));
+    expect(budget.columns).toBe(0);
+    expect(parsed.slice(0, IMPORT_REPAIR_COLUMNS / 200).every((c) => c.columns.custom.map((col) => col.id).join() === 'x')).toBe(true);
+    // The rest of the config is still read leniently, and a valid config needs no budget.
+    expect(parsed.at(-1)).toMatchObject({ layout: 'list', columns: defaultBoardConfig().columns });
+    expect(parseBoardConfigLenient({ columns: { groupBy: 'custom', custom: [{ id: 'y', name: 'Y' }] } }, budget).columns.custom).toHaveLength(1);
+    // A stored config (no budget) is repaired whatever came before.
+    expect(parseBoardConfigLenient(broken).columns.custom.map((c) => c.id)).toEqual(['x']);
   });
 
   it('custom grouping ignores archive defaults', () => {

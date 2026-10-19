@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { milestoneCreateInput, milestoneUpdateInput, reorderInput } from '@shared/schemas';
-import { currentUser } from '../auth/context';
+import { fold } from '../core/fold';
 import type { Db } from '../db';
 import type { AppEnv, Deps } from '../env';
 import { badRequest } from '../http/errors';
@@ -14,6 +14,7 @@ import { rewriteBoardRefs } from '../services/boardRefs';
 import { applyPositions, assertExactIdSet, getMilestone, nextPosition, requireMilestone } from '../services/entities';
 import type { EpicRow, MilestoneRow, ProjectRow } from '../services/rows';
 import { inJson, jsonList, nowIso } from '../services/sql';
+import { currentUser } from '../space/context';
 
 // ---------------------------------------------------------------------------
 // Shared helpers (milestones + epics)
@@ -89,12 +90,16 @@ export function milestoneRoutes({ db }: Deps) {
       const status = input.status ?? 'planned';
       const now = nowIso();
       const milestoneId = db.run(
-        `INSERT INTO milestones (project_id, name, description, status, start_date, due_date, position, completed_at, created_at, updated_at)
-         VALUES (:projectId, :name, :description, :status, :startDate, :dueDate, :position, :completedAt, :now, :now)`,
+        `INSERT INTO milestones (project_id, name, name_fold, description, description_fold, status, start_date, due_date,
+                                position, completed_at, created_at, updated_at)
+         VALUES (:projectId, :name, :nameFold, :description, :descriptionFold, :status, :startDate, :dueDate,
+                 :position, :completedAt, :now, :now)`,
         {
           projectId: input.projectId,
           name: input.name,
+          nameFold: fold(input.name),
           description: input.description ?? '',
+          descriptionFold: fold(input.description ?? ''),
           status,
           startDate,
           dueDate,
@@ -148,13 +153,16 @@ export function milestoneRoutes({ db }: Deps) {
       after.completed_at = nextCompletedAt(isClosedMilestone(after.status), before.completed_at, now);
       db.run(
         `UPDATE milestones
-            SET name = :name, description = :description, status = :status, start_date = :startDate,
-                due_date = :dueDate, completed_at = :completedAt, updated_at = :now
+            SET name = :name, name_fold = :nameFold, description = :description, description_fold = :descriptionFold,
+                status = :status, start_date = :startDate, due_date = :dueDate, completed_at = :completedAt,
+                updated_at = :now
           WHERE id = :id`,
         {
           id,
           name: after.name,
+          nameFold: fold(after.name),
           description: after.description,
+          descriptionFold: fold(after.description),
           status: after.status,
           startDate: after.start_date,
           dueDate: after.due_date,

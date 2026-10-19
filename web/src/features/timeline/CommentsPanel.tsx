@@ -1,5 +1,8 @@
 // Task comments: oldest → newest, own comments editable in place, and a composer that sticks
-// to the bottom of the task drawer's scroll container (unsent drafts kept per task).
+// to the bottom of the task drawer's scroll container (unsent drafts kept per task). Who may write,
+// edit or delete follows the role (app/permissions.ts entryActions: admins and owners also delete
+// anyone's comment; viewers only read), authors who left the space or whose account was deleted
+// say so (lib/people.ts, design §12.9), and an imported comment says who imported it (ImportedNote).
 
 import { useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
@@ -9,9 +12,13 @@ import { LIMITS } from '@shared/constants';
 import type { CommentDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
 import { useAddComment, useDeleteComment, useUpdateComment } from '../../api/timeline';
+import { entryActions, type EntryActions } from '../../app/permissions';
+import { useSpace, useSpaceId } from '../../app/space';
 import { UserAvatar } from '../../components/domain';
 import { Button, IconButton, Markdown, MarkdownEditor, Menu, SkeletonText, toast, useConfirm } from '../../components/ui';
 import { formatDateTime } from '../../lib/format';
+import { personLabel } from '../../lib/people';
+import { ImportedNote } from './ImportedNote';
 import { scrollBehavior } from '../../lib/motion';
 import { clearDraft, readDraft, writeDraft } from './drafts';
 import { commentLeaveBody, isGoneError, stillInTimeline } from './leaveSave';
@@ -26,7 +33,8 @@ export interface CommentsPanelProps {
 }
 
 export function CommentsPanel({ taskId, comments, stickyComposer }: CommentsPanelProps) {
-  const { user } = useLookups();
+  const { user, personById } = useLookups();
+  const { permissions } = useSpace();
   const listRef = useRef<HTMLOListElement>(null);
 
   const revealLatest = () =>
@@ -48,23 +56,26 @@ export function CommentsPanel({ taskId, comments, stickyComposer }: CommentsPane
         <ol ref={listRef} aria-label="Comments" className="flex min-w-0 flex-col gap-5 pb-4 pt-1">
           {comments.map((c) => (
             <li key={c.id} className="min-w-0 scroll-mb-48">
-              <CommentItem comment={c} taskId={taskId} canEdit={c.author?.id === user.id} />
+              <CommentItem comment={c} taskId={taskId} can={entryActions(permissions, c, user.id, personById)} />
             </li>
           ))}
         </ol>
       )}
-      <CommentComposer taskId={taskId} sticky={stickyComposer} onPosted={revealLatest} />
+      {permissions.write && <CommentComposer taskId={taskId} sticky={stickyComposer} onPosted={revealLatest} />}
     </div>
   );
 }
 
 // ---- One comment --------------------------------------------------------------------
 
-function CommentItem({ comment, taskId, canEdit }: { comment: CommentDTO; taskId: number; canEdit: boolean }) {
+function CommentItem({ comment, taskId, can }: { comment: CommentDTO; taskId: number; can: EntryActions }) {
+  const sid = useSpaceId();
+  const { user, personById } = useLookups();
   const qc = useQueryClient();
   const update = useUpdateComment(taskId);
   const remove = useDeleteComment(taskId);
   const confirm = useConfirm();
+  const author = personLabel(comment.author, personById);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.body);
   const deleting = remove.isPending;
@@ -73,13 +84,13 @@ function CommentItem({ comment, taskId, canEdit }: { comment: CommentDTO; taskId
   // switched) saves the edit, like the task title and description editors; only Cancel / Esc
   // discard it (after asking). Not when the comment is already gone (deleted elsewhere, signed
   // out). mutateAsync: the request and its error toast outlive this component.
-  const latest = useRef({ editing, draft, body: comment.body, saving: update.isPending, save: update.mutateAsync, qc, taskId, id: comment.id });
-  latest.current = { editing, draft, body: comment.body, saving: update.isPending, save: update.mutateAsync, qc, taskId, id: comment.id };
+  const latest = useRef({ editing, draft, body: comment.body, saving: update.isPending, save: update.mutateAsync, qc, sid, taskId, id: comment.id });
+  latest.current = { editing, draft, body: comment.body, saving: update.isPending, save: update.mutateAsync, qc, sid, taskId, id: comment.id };
   useEffect(
     () => () => {
       const l = latest.current;
       const body = commentLeaveBody(l);
-      if (body === null || !stillInTimeline(l.qc, l.taskId, 'comments', l.id)) return;
+      if (body === null || !stillInTimeline(l.qc, l.sid, l.taskId, 'comments', l.id)) return;
       l.save({ id: l.id, body }).catch((err: unknown) => {
         if (!isGoneError(err)) toast.error(err);
       });
@@ -117,7 +128,13 @@ function CommentItem({ comment, taskId, canEdit }: { comment: CommentDTO; taskId
   };
 
   const del = async () => {
-    const ok = await confirm({ title: 'Delete this comment?', body: 'This can’t be undone.', confirmLabel: 'Delete', danger: true });
+    const theirs = comment.author?.id !== user.id;
+    const ok = await confirm({
+      title: theirs ? `Delete ${author.name}’s comment?` : 'Delete this comment?',
+      body: 'This can’t be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
     if (!ok) return;
     // The item unmounts once the refreshed list drops it, so don't rely on mutate callbacks.
     remove.mutateAsync(comment.id).then(
@@ -126,25 +143,24 @@ function CommentItem({ comment, taskId, canEdit }: { comment: CommentDTO; taskId
     );
   };
 
-  const author = comment.author?.displayName ?? 'Unknown user';
-
   return (
     <article
-      aria-label={`Comment by ${author}`}
+      aria-label={`Comment by ${author.name}`}
       aria-busy={deleting || undefined}
       className={clsx('flex min-w-0 gap-3 transition-opacity', deleting && 'pointer-events-none opacity-50')}
     >
       <UserAvatar user={comment.author} size="md" className="mt-0.5" />
       <div className="min-w-0 flex-1">
         <header className="flex min-h-8 min-w-0 items-center gap-x-2 text-[13px]">
-          <span className={clsx('min-w-0 truncate font-medium', comment.author ? 'text-fg' : 'italic text-fg-muted')}>{author}</span>
+          <span className={clsx('min-w-0 truncate font-medium', author.gone ? 'italic text-fg-muted' : 'text-fg')}>{author.name}</span>
+          {author.note && <span className="shrink-0 text-fg-muted">{author.note}</span>}
           <RelativeTime iso={comment.createdAt} className="shrink-0 text-fg-muted" />
           {comment.editedAt && (
             <span className="shrink-0 text-fg-subtle" title={`Edited ${formatDateTime(comment.editedAt)}`}>
               · edited
             </span>
           )}
-          {canEdit && !editing && (
+          {(can.edit || can.delete) && !editing && (
             <Menu
               label="Comment actions"
               trigger={
@@ -157,13 +173,14 @@ function CommentItem({ comment, taskId, canEdit }: { comment: CommentDTO; taskId
                 />
               }
               items={[
-                { label: 'Edit', icon: <Pencil />, onSelect: startEdit },
+                can.edit && { label: 'Edit', icon: <Pencil />, onSelect: startEdit },
                 { separator: true },
-                { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => void del() },
+                can.delete && { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => void del() },
               ]}
             />
           )}
         </header>
+        <ImportedNote entry={comment} className="-mt-1 mb-1" />
         {editing ? (
           <MarkdownEditor
             aria-label="Edit comment"
@@ -221,8 +238,9 @@ function useScrollerBottomPadding(ref: RefObject<HTMLElement | null>, enabled: b
 }
 
 function CommentComposer({ taskId, sticky, onPosted }: { taskId: number; sticky: boolean; onPosted: () => void }) {
+  const sid = useSpaceId();
   const add = useAddComment(taskId);
-  const [draft, setDraft] = useState(() => readDraft('comment', taskId) ?? '');
+  const [draft, setDraft] = useState(() => readDraft(sid, 'comment', taskId) ?? '');
   const [expanded, setExpanded] = useState(() => draft !== '');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -231,7 +249,7 @@ function CommentComposer({ taskId, sticky, onPosted }: { taskId: number; sticky:
 
   const change = (value: string) => {
     setDraft(value);
-    writeDraft('comment', taskId, value);
+    writeDraft(sid, 'comment', taskId, value);
   };
 
   const send = () => {
@@ -242,7 +260,7 @@ function CommentComposer({ taskId, sticky, onPosted }: { taskId: number; sticky:
     // switched to another task meanwhile and this composer is gone.
     add.mutateAsync({ body }).then(
       () => {
-        clearDraft('comment', taskId);
+        clearDraft(sid, 'comment', taskId);
         setDraft('');
         onPosted();
         if (hadFocus) requestAnimationFrame(() => textareaRef.current?.focus());

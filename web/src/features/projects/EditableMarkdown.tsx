@@ -26,6 +26,8 @@ export interface EditableMarkdownProps {
    * out), so the draft is dropped instead of sending a request that can only fail. Default: save.
    */
   canSaveOnLeave?: () => boolean;
+  /** The text only, no editing (a role that may not change it, design §12.9). */
+  readOnly?: boolean;
   className?: string;
 }
 
@@ -37,6 +39,7 @@ export function EditableMarkdown({
   clampPx = 320,
   heading,
   canSaveOnLeave,
+  readOnly = false,
   className,
 }: EditableMarkdownProps) {
   const confirm = useConfirm();
@@ -95,7 +98,7 @@ export function EditableMarkdown({
     [],
   );
 
-  const editButton = (
+  const editButton = readOnly ? null : (
     <Button
       ref={editButtonRef}
       size="sm"
@@ -146,6 +149,14 @@ export function EditableMarkdown({
   }
 
   if (!value.trim()) {
+    if (readOnly) {
+      return (
+        <div className={className}>
+          {headingRow(null)}
+          <p className="text-sm text-fg-subtle">No description.</p>
+        </div>
+      );
+    }
     return (
       <div className={className}>
         {headingRow(null)}
@@ -170,7 +181,7 @@ export function EditableMarkdown({
       {headingRow(editButton)}
       <div
         ref={bodyRef}
-        className={clsx('min-w-0', !heading && 'pr-12 md:pr-20', clamped && 'overflow-hidden')}
+        className={clsx('min-w-0', !heading && !readOnly && 'pr-12 md:pr-20', clamped && 'overflow-hidden')}
         style={clamped ? { maxHeight: clampPx, maskImage: fade, WebkitMaskImage: fade } : undefined}
       >
         <Markdown source={value} />

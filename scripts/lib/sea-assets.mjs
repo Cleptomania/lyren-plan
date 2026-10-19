@@ -1,6 +1,7 @@
 // The web client as single-executable-application assets: every file of dist/web except source
-// maps, keyed `web/<path>`, plus a manifest (server/src/desktop/assets.ts reads both), and the
-// sea-config.json that names them. Pure apart from reading the files; unit-tested in
+// maps and _headers (the Cloudflare static assets' header rules, which the app never serves), keyed
+// `web/<path>`, plus a manifest (server/src/desktop/assets.ts reads both), and the sea-config.json that
+// names them. Pure apart from reading the files; unit-tested in
 // scripts/test/sea-assets.test.mjs.
 
 import fs from 'node:fs';
@@ -16,6 +17,9 @@ export const MANIFEST_KEY = 'lyren/manifest.json';
  */
 export const TRAY_ICON_KEY = 'lyren/tray-icon.ico';
 
+/** Files at the top of dist/web that are configuration for another server (server/src/http/static.ts NOT_SERVED). */
+const NOT_EMBEDDED = new Set(['_headers']);
+
 /** Files under `webDir` to embed: [{ path: '/assets/x.js', key: 'web/assets/x.js', file, size, sha256, etag }]. */
 export function collectWebAssets(webDir) {
   const root = path.resolve(webDir);
@@ -24,7 +28,7 @@ export function collectWebAssets(webDir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(abs);
-      else if (entry.isFile() && !entry.name.endsWith('.map')) {
+      else if (entry.isFile() && !entry.name.endsWith('.map') && !(dir === root && NOT_EMBEDDED.has(entry.name))) {
         const rel = path.relative(root, abs).split(path.sep).join('/');
         const body = fs.readFileSync(abs);
         const hash = sha256(body);

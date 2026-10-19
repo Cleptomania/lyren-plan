@@ -1,7 +1,7 @@
 // Optimistic display for tasks shown from the dashboard's own cache.
 //
 // Row edits (status / priority pickers, the "⋯" menu) go through useUpdateTask, whose
-// optimistic writes only touch the ['tasks', …] caches; the dashboard list refreshes when
+// optimistic writes only touch the ['space', id, 'tasks', …] caches; the dashboard list refreshes when
 // the mutation settles. Until then this overlays the in-flight patches (and, right after
 // success, the server's copy) on the dashboard's TaskDTOs, so a row reflects the edit
 // immediately — and falls back by itself when the mutation fails.
@@ -11,7 +11,8 @@ import { useCallback } from 'react';
 import type { TaskUpdateInput } from '@shared/schemas';
 import type { TaskDTO } from '@shared/types';
 import { useBootstrap } from '../../api/bootstrap';
-import { applyTaskPatch, UPDATE_TASK_MUTATION_KEY } from '../../api/tasks';
+import { applyTaskPatch, updateTaskMutationKey } from '../../api/tasks';
+import { useSpaceId } from '../../app/space';
 
 interface UpdateSnapshot {
   status: 'idle' | 'pending' | 'success' | 'error';
@@ -21,9 +22,10 @@ interface UpdateSnapshot {
 }
 
 export function useTaskOverlay(): (task: TaskDTO) => TaskDTO {
-  const boot = useBootstrap().data;
+  const sid = useSpaceId();
+  const boot = useBootstrap(sid).data;
   const updates = useMutationState<UpdateSnapshot>({
-    filters: { mutationKey: UPDATE_TASK_MUTATION_KEY },
+    filters: { mutationKey: updateTaskMutationKey(sid) },
     select: (m) => ({
       status: m.state.status,
       vars: m.state.variables as UpdateSnapshot['vars'],

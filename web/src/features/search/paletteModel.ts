@@ -2,6 +2,7 @@
 // match highlighting and the grouped / flattened result list. No React — unit-tested.
 
 import { searchTokens } from '@shared/filter';
+import type { SpaceRole } from '@shared/roles';
 import type { BoardDTO, EpicDTO, MilestoneDTO, ProjectDTO, SearchResultDTO, TaskDTO } from '@shared/types';
 import type { RecentItem } from './recent';
 
@@ -92,9 +93,19 @@ export type PaletteItem<A extends PaletteActionLike = PaletteActionLike> =
   | { kind: 'project'; key: string; project: ProjectDTO }
   | { kind: 'milestone'; key: string; milestone: MilestoneDTO }
   | { kind: 'epic'; key: string; epic: EpicDTO }
-  | { kind: 'board'; key: string; board: BoardDTO };
+  | { kind: 'board'; key: string; board: BoardDTO }
+  | { kind: 'space'; key: string; space: PaletteSpace };
 
-export type PaletteSectionId = 'recent' | 'actions' | 'tasks' | 'projects' | 'milestones' | 'epics' | 'boards';
+export type PaletteSectionId = 'recent' | 'actions' | 'tasks' | 'projects' | 'milestones' | 'epics' | 'boards' | 'spaces';
+
+/** One of the account's spaces, in "Switch space…" (components/layout/navigation.ts spaceChoices). */
+export interface PaletteSpace {
+  id: string;
+  name: string;
+  role: SpaceRole;
+  /** The space being viewed. */
+  current: boolean;
+}
 
 export interface PaletteSection<A extends PaletteActionLike = PaletteActionLike> {
   id: PaletteSectionId;
@@ -172,6 +183,16 @@ export function buildSections<A extends PaletteActionLike>(input: BuildSectionsI
     filterBoards(input.boards, tokens, PALETTE_LIMITS.boards).map((board) => ({ kind: 'board', key: `board:${board.id}`, board })),
   );
   return sections;
+}
+
+/**
+ * "Switch space…" (design §12.9): the palette lists the account's spaces instead of searching the
+ * current one, every space whose name contains each token, in the switcher's order.
+ */
+export function buildSpaceSections<A extends PaletteActionLike>(query: string, spaces: readonly PaletteSpace[]): Array<PaletteSection<A>> {
+  const tokens = paletteTokens(query);
+  const items = spaces.filter((s) => matchesAllTokens(s.name, tokens)).map((space) => ({ kind: 'space' as const, key: `space:${space.id}`, space }));
+  return items.length > 0 ? [{ id: 'spaces', label: 'Spaces', items }] : [];
 }
 
 /** Items in keyboard order. */

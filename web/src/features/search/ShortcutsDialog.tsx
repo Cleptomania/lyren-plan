@@ -1,11 +1,12 @@
-// Keyboard shortcuts help ('?') — lazy chunk of CommandPalette.tsx. Lists SHORTCUT_GROUPS with
-// platform-specific key labels (⌘ on Apple devices, Ctrl elsewhere) and spoken names for
-// screen readers. Keys are shown on touch devices too (tablets with keyboards).
+// Keyboard shortcuts help ('?') — lazy chunk of CommandPalette.tsx. Lists SHORTCUT_GROUPS (those the
+// space's role can use) with platform-specific key labels (⌘ on Apple devices, Ctrl elsewhere) and
+// spoken names for screen readers. Keys are shown on touch devices too (tablets with keyboards).
 
-import { Fragment, useId } from 'react';
+import { Fragment, useId, useMemo } from 'react';
+import { useSpace } from '../../app/space';
 import { Dialog, isApplePlatform, Kbd } from '../../components/ui';
 import { formatShortcutKeys } from '../../components/ui/shortcuts';
-import { SHORTCUT_GROUPS, spokenCombo, type ShortcutEntry } from './shortcutList';
+import { shortcutGroups, spokenCombo, type ShortcutEntry } from './shortcutList';
 
 export interface ShortcutsDialogProps {
   open: boolean;
@@ -15,6 +16,8 @@ export interface ShortcutsDialogProps {
 export default function ShortcutsDialog({ open, onClose }: ShortcutsDialogProps) {
   const apple = isApplePlatform();
   const baseId = useId();
+  const { write } = useSpace().permissions;
+  const groups = useMemo(() => shortcutGroups(write), [write]);
   return (
     <Dialog
       open={open}
@@ -24,7 +27,7 @@ export default function ShortcutsDialog({ open, onClose }: ShortcutsDialogProps)
       size="lg"
     >
       <div className="grid gap-x-8 gap-y-6 pb-2 md:grid-cols-2">
-        {SHORTCUT_GROUPS.map((group, gi) => {
+        {groups.map((group, gi) => {
           const headingId = `${baseId}-${gi}`;
           return (
             <section key={group.title} aria-labelledby={headingId} className="min-w-0">

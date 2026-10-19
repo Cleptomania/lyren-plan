@@ -1,8 +1,9 @@
 // Comments, work logs and activity (SPEC §5.6, §5.8). Mounted at /api, so paths are full
 // sub-paths: /tasks/:id/timeline|comments|worklogs, /comments/:id, /worklogs(/:id), /activity.
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { addDays } from '@shared/dates';
+import { atLeast, type SpaceRole } from '@shared/roles';
 import {
   activityQueryInput,
   commentCreateInput,
@@ -13,7 +14,6 @@ import {
 } from '@shared/schemas';
 import type { ActivityData, CommentDTO, TaskTimelineDTO, WorklogDTO, WorklogReportDTO } from '@shared/types';
 import type { Db } from '../db';
-import { currentUser } from '../auth/context';
 import type { AppEnv, Deps } from '../env';
 import { badRequest, forbidden, notFound } from '../http/errors';
 import { readId, readJson, readQuery } from '../http/validate';
@@ -23,6 +23,7 @@ import { COMMENT_SELECT, toCommentDTO, toWorklogDTO, WORKLOG_SELECT } from '../s
 import type { AuthorJoin, CommentRow, TaskRow, WorklogRow } from '../services/rows';
 import { nowIso, serverToday } from '../services/sql';
 import { taskRefOf } from '../services/tasks';
+import { currentIdentity, currentUser } from '../space/context';
 
 /** Days covered by the work-log report when `from` is omitted (inclusive of `to`). */
 const REPORT_DEFAULT_DAYS = 30;
@@ -51,9 +52,25 @@ function worklogData(row: Pick<WorklogRow, 'minutes' | 'date' | 'note'>): Activi
   return { minutes: row.minutes, date: row.date, note: commentExcerpt(row.note) };
 }
 
-/** Only the author may change a comment or work log (rows whose author was deleted are locked). */
-function assertAuthor(row: { user_id: number | null }, userId: number, what: string): void {
-  if (row.user_id !== userId) throw forbidden(`Only the author can change this ${what}`);
+/**
+ * Only the author may edit a comment or work log (design §6.5). Deleting is also allowed for admins and
+ * owners (`allowModerator`). Rows of a deleted account (user_id NULL, or a mirror row with deleted = 1)
+ * and of placeholders never match an actor, so nobody can edit them.
+ */
+function assertAuthor(
+  row: { user_id: number | null },
+  actor: { id: number; role: SpaceRole },
+  what: string,
+  { allowModerator = false }: { allowModerator?: boolean } = {},
+): void {
+  if (row.user_id === actor.id) return;
+  if (allowModerator && atLeast(actor.role, 'admin')) return;
+  throw forbidden(`Only the author can change this ${what}`);
+}
+
+/** The acting user and their role in the space, for assertAuthor. */
+function actorOf(c: Context<AppEnv>): { id: number; role: SpaceRole } {
+  return { id: currentUser(c).id, role: currentIdentity(c).role };
 }
 
 export function timelineRoutes({ db }: Deps) {
@@ -112,7 +129,7 @@ export function timelineRoutes({ db }: Deps) {
     const user = currentUser(c);
     db.tx(() => {
       const row = requireComment(db, id);
-      assertAuthor(row, user.id, 'comment');
+      assertAuthor(row, actorOf(c), 'comment');
       if (row.body === input.body) return; // no-op: not marked edited, nothing logged
       const task = requireTask(db, row.task_id);
       const now = nowIso();
@@ -140,7 +157,7 @@ export function timelineRoutes({ db }: Deps) {
     const user = currentUser(c);
     db.tx(() => {
       const row = requireComment(db, id);
-      assertAuthor(row, user.id, 'comment');
+      assertAuthor(row, actorOf(c), 'comment', { allowModerator: true });
       const task = requireTask(db, row.task_id);
       db.run('DELETE FROM comments WHERE id = :id', { id });
       recordActivity(db, {
@@ -192,7 +209,7 @@ export function timelineRoutes({ db }: Deps) {
     const user = currentUser(c);
     db.tx(() => {
       const row = requireWorklog(db, id);
-      assertAuthor(row, user.id, 'work log');
+      assertAuthor(row, actorOf(c), 'work log');
       const next = {
         date: input.date ?? row.date,
         minutes: input.minutes !== undefined ? input.minutes : row.minutes,
@@ -229,7 +246,7 @@ export function timelineRoutes({ db }: Deps) {
     const user = currentUser(c);
     db.tx(() => {
       const row = requireWorklog(db, id);
-      assertAuthor(row, user.id, 'work log');
+      assertAuthor(row, actorOf(c), 'work log', { allowModerator: true });
       const task = requireTask(db, row.task_id);
       db.run('DELETE FROM work_logs WHERE id = :id', { id });
       recordActivity(db, {
@@ -258,16 +275,18 @@ export function timelineRoutes({ db }: Deps) {
       ]);
     }
     const projectFilter = q.projectId !== undefined ? 'AND t.project_id = :projectId' : '';
+    const userFilter = q.userId !== undefined ? 'AND w.user_id = :userId' : '';
     const rows = db.all<WorklogRow & AuthorJoin & { task_title: string; task_ref: string; task_project_id: number }>(
-      `SELECT w.*, u.display_name AS author_name,
+      `SELECT w.*, u.display_name AS author_name, ib.display_name AS imported_by_name,
               t.title AS task_title, t.project_id AS task_project_id, p.key || '-' || t.number AS task_ref
          FROM work_logs w
          JOIN tasks t ON t.id = w.task_id
          JOIN projects p ON p.id = t.project_id
          LEFT JOIN users u ON u.id = w.user_id
-        WHERE w.date >= :from AND w.date <= :to ${projectFilter}
+         LEFT JOIN users ib ON ib.id = w.imported_by
+        WHERE w.date >= :from AND w.date <= :to ${projectFilter} ${userFilter}
         ORDER BY w.date DESC, w.created_at DESC, w.id DESC`,
-      { from, to, projectId: q.projectId },
+      { from, to, projectId: q.projectId, userId: q.userId },
     );
     const body: WorklogReportDTO = {
       items: rows.map((row) => ({

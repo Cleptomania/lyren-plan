@@ -1,6 +1,6 @@
 // /boards — global boards first (reorderable: drag the grip, or "Move up / down" in the row
 // menu), then project boards grouped by project (they open on the project's Board tab).
-// "New board" offers templates and an optional project.
+// "New board" offers templates and an optional project. Viewers (design §12.9) only open boards.
 
 import {
   closestCenter,
@@ -21,6 +21,7 @@ import { Link, useNavigate } from 'react-router';
 import { GROUP_FIELD_LABELS, type BoardConfig } from '@shared/board';
 import type { BoardDTO, ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpaceId, useSpacePath } from '../../app/space';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { Badge, Button, EmptyState, IconButton, Menu, type MenuItem } from '../../components/ui';
@@ -51,10 +52,11 @@ function BoardRow({
   actions: BoardActions;
   onMove: (delta: -1 | 1) => void;
 }) {
+  const sid = useSpaceId();
   const navigate = useNavigate();
-  const sortable = count > 1;
+  const sortable = count > 1 && actions.permissions.write;
   const { setNodeRef, setActivatorNodeRef, listeners, attributes, transform, transition, isDragging } = useSortable({ id: board.id, disabled: !sortable });
-  const href = boardHref(board);
+  const href = boardHref(sid, board);
   const isDefault = actions.isDefault(board);
   const isHome = actions.isHome(board);
   const items: MenuItem[] = [
@@ -165,10 +167,11 @@ function BoardList({ boards, actions }: { boards: BoardDTO[]; actions: BoardActi
 }
 
 function ProjectHeading({ project }: { project: ProjectDTO }) {
+  const sp = useSpacePath();
   return (
     <h3 className="mb-2 flex min-w-0 items-center gap-2 text-[13px] font-medium text-fg-muted">
       <span aria-hidden className="size-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: project.color }} />
-      <Link to={`/projects/${project.id}/board`} className="truncate hover:text-fg hover:underline">
+      <Link to={sp(`/projects/${project.id}/board`)} className="truncate hover:text-fg hover:underline">
         {project.name}
       </Link>
       <span className="shrink-0 font-mono text-[11px] text-fg-subtle">{project.key}</span>
@@ -191,6 +194,7 @@ export default function BoardsPage() {
     [lookups.projects, lookups.boards],
   );
   const empty = globalBoards.length === 0 && byProject.length === 0;
+  const { write } = actions.permissions;
 
   return (
     <Page
@@ -201,9 +205,11 @@ export default function BoardsPage() {
           subtitle="Saved, configurable views over your tasks"
           icon={<SquareKanban />}
           actions={
-            <Button variant="primary" icon={<Plus />} hideLabelOnMobile onClick={() => setNewOpen(true)}>
-              New board
-            </Button>
+            write && (
+              <Button variant="primary" icon={<Plus />} hideLabelOnMobile onClick={() => setNewOpen(true)}>
+                New board
+              </Button>
+            )
           }
         />
       }
@@ -214,9 +220,11 @@ export default function BoardsPage() {
           title="No boards yet"
           body="Boards show tasks as columns — by status, priority, epic, due date or your own custom columns."
           action={
-            <Button variant="primary" icon={<Plus />} onClick={() => setNewOpen(true)}>
-              New board
-            </Button>
+            write && (
+              <Button variant="primary" icon={<Plus />} onClick={() => setNewOpen(true)}>
+                New board
+              </Button>
+            )
           }
         />
       ) : (
@@ -226,16 +234,18 @@ export default function BoardsPage() {
               <h2 id="boards-global" className="text-sm font-semibold text-fg">
                 Across projects
               </h2>
-              <p className="text-xs text-fg-muted">Shown in the sidebar. Drag the handle or use the menu to reorder.</p>
+              <p className="text-xs text-fg-muted">{write ? 'Shown in the sidebar. Drag the handle or use the menu to reorder.' : 'Shown in the sidebar.'}</p>
             </div>
             {globalBoards.length > 0 ? (
               <BoardList boards={globalBoards} actions={actions} />
             ) : (
               <p className="rounded-lg border border-dashed border-border-strong px-4 py-5 text-center text-[13px] text-fg-muted">
                 No boards across projects.{' '}
-                <button type="button" className="font-medium text-accent hover:underline" onClick={() => setNewOpen(true)}>
-                  Create one
-                </button>
+                {write && (
+                  <button type="button" className="font-medium text-accent hover:underline" onClick={() => setNewOpen(true)}>
+                    Create one
+                  </button>
+                )}
               </p>
             )}
           </section>
@@ -257,13 +267,13 @@ export default function BoardsPage() {
               </div>
             ) : (
               <p className="rounded-lg border border-dashed border-border-strong px-4 py-5 text-center text-[13px] text-fg-muted">
-                No project boards yet. Every project has a Board tab — configuring it saves a board here.
+                No project boards yet.{write && ' Every project has a Board tab — configuring it saves a board here.'}
               </p>
             )}
           </section>
         </div>
       )}
-      <NewBoardDialog open={newOpen} onClose={() => setNewOpen(false)} />
+      {write && <NewBoardDialog open={newOpen} onClose={() => setNewOpen(false)} />}
     </Page>
   );
 }

@@ -10,6 +10,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import type { BootstrapDTO } from '@shared/types';
 import { qk } from '../../api/keys';
+import { useSpaceId } from '../../app/space';
 
 export type HierarchyKind = 'projects' | 'milestones' | 'epics';
 
@@ -21,6 +22,7 @@ export function stillInBootstrap(boot: BootstrapDTO | undefined, kind: Hierarchy
 
 /** `(kind, id) => boolean` reading the bootstrap cache at call time (for EditableMarkdown's canSaveOnLeave). */
 export function useStillInBootstrap(): (kind: HierarchyKind, id: number) => boolean {
+  const sid = useSpaceId();
   const qc = useQueryClient();
-  return useCallback((kind, id) => stillInBootstrap(qc.getQueryData<BootstrapDTO>(qk.bootstrap), kind, id), [qc]);
+  return useCallback((kind, id) => stillInBootstrap(qc.getQueryData<BootstrapDTO>(qk.bootstrap(sid)), kind, id), [qc, sid]);
 }

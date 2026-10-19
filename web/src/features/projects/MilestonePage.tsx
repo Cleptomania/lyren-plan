@@ -7,6 +7,7 @@ import { Navigate, useNavigate, useParams } from 'react-router';
 import { LIMITS } from '@shared/constants';
 import type { MilestoneDTO, ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace, useSpaceId, useSpacePath } from '../../app/space';
 import { DatePicker } from '../../components/domain';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
@@ -27,6 +28,7 @@ import { useStillInBootstrap } from './leaveSave';
 import { useSaveMilestone } from './useHierarchyMutations';
 
 export default function MilestonePage() {
+  const sid = useSpaceId();
   const { project } = useProjectContext();
   const { milestoneId } = useParams();
   const id = parseRouteId(milestoneId);
@@ -37,7 +39,7 @@ export default function MilestonePage() {
   useDocumentTitle(milestone ? `${milestone.name} · ${project.name}` : deletingRef.current ? null : 'Milestone not found');
 
   if (!milestone) return deletingRef.current ? null : <EntityNotFound kind="Milestone" project={project} />;
-  if (milestone.projectId !== project.id) return <Navigate replace to={milestoneUrl(milestone.projectId, milestone.id)} />;
+  if (milestone.projectId !== project.id) return <Navigate replace to={milestoneUrl(sid, milestone.projectId, milestone.id)} />;
   return <MilestoneView key={milestone.id} project={project} milestone={milestone} deletingRef={deletingRef} />;
 }
 
@@ -50,6 +52,9 @@ function MilestoneView({
   milestone: MilestoneDTO;
   deletingRef: { current: boolean };
 }) {
+  const sp = useSpacePath();
+  const sid = useSpaceId();
+  const { write } = useSpace().permissions;
   const navigate = useNavigate();
   const { milestonesByProject, epicsByProject } = useLookups();
   const save = useSaveMilestone();
@@ -66,14 +71,17 @@ function MilestoneView({
     dialogs.deleteMilestone(m, {
       onDeleting: () => (deletingRef.current = true),
       onFailed: () => (deletingRef.current = false),
-      onDeleted: () => navigate(projectUrl(project.id), { replace: true }),
+      onDeleted: () => navigate(projectUrl(sid, project.id), { replace: true }),
     });
-  const menu = milestoneMenuItems(m, {
-    edit: () => dialogs.editMilestone(m),
-    setStatus: (status) => void save(m, { status }),
-    addEpic: () => dialogs.newEpic(m.id),
-    remove,
-  }).filter((item): item is MenuItem => !!item);
+  // Viewers (design §12.9) read the milestone: no menu, no editors.
+  const menu = write
+    ? milestoneMenuItems(m, {
+        edit: () => dialogs.editMilestone(m),
+        setStatus: (status) => void save(m, { status }),
+        addEpic: () => dialogs.newEpic(m.id),
+        remove,
+      }).filter((item): item is MenuItem => !!item)
+    : undefined;
 
   return (
     <Page
@@ -83,10 +91,10 @@ function MilestoneView({
           title={m.name}
           icon={<MilestoneIcon />}
           subtitle={`Milestone · ${project.name}`}
-          backTo={projectUrl(project.id)}
+          backTo={projectUrl(sid, project.id)}
           breadcrumbs={[
-            { label: 'Projects', to: '/projects' },
-            { label: project.name, to: projectUrl(project.id) },
+            { label: 'Projects', to: sp('/projects') },
+            { label: project.name, to: projectUrl(sid, project.id) },
           ]}
           menu={menu}
         />
@@ -96,6 +104,7 @@ function MilestoneView({
         <InlineEdit
           value={m.name}
           onSave={(name) => save(m, { name })}
+          disabled={!write}
           aria-label="Milestone name"
           maxLength={LIMITS.nameMax}
           className="text-xl font-semibold leading-tight text-fg md:text-2xl"
@@ -113,7 +122,7 @@ function MilestoneView({
                   value={m.startDate}
                   max={m.dueDate ?? undefined}
                   onChange={(startDate) => void save(m, { startDate })}
-                  triggerProps={{ fullWidth: true }}
+                  triggerProps={{ fullWidth: true, readOnly: !write }}
                 />
               </PropertyRow>
               <PropertyRow label="Due date">
@@ -123,7 +132,7 @@ function MilestoneView({
                   closed={closed}
                   min={m.startDate ?? undefined}
                   onChange={(dueDate) => void save(m, { dueDate })}
-                  triggerProps={{ fullWidth: true }}
+                  triggerProps={{ fullWidth: true, readOnly: !write }}
                 />
               </PropertyRow>
               {m.completedAt && (
@@ -150,6 +159,7 @@ function MilestoneView({
                 value={m.description}
                 onSave={async (description) => (await save(m, { description })) !== undefined}
                 canSaveOnLeave={() => stillInBootstrap('milestones', m.id)}
+                readOnly={!write}
               />
             </Card>
 
@@ -158,9 +168,11 @@ function MilestoneView({
                 <h2 id="milestone-epics" className="text-[15px] font-semibold text-fg">
                   Epics
                 </h2>
-                <Button size="sm" icon={<Plus />} onClick={() => dialogs.newEpic(m.id)}>
-                  Add epic
-                </Button>
+                {write && (
+                  <Button size="sm" icon={<Plus />} onClick={() => dialogs.newEpic(m.id)}>
+                    Add epic
+                  </Button>
+                )}
               </div>
               <Card padding="none">
                 <EpicList

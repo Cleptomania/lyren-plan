@@ -34,7 +34,7 @@ export function useThemePreference(): [ThemePreference, (pref: ThemePreference) 
   useEffect(() => {
     window.addEventListener('storage', sync);
     window.addEventListener(THEME_CHANGE_EVENT, sync);
-    // Settings → Preferences changes the theme through lib/theme, which toggles <html class="dark">.
+    // Account settings → Preferences changes the theme through lib/theme, which toggles <html class="dark">.
     const mo = new MutationObserver(sync);
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     return () => {

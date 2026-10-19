@@ -83,7 +83,7 @@ export function shellArg(value: string, shell: CommandShell): string {
   return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-/** The option that points a command at the running database (routes/desktop.ts commandTargetOption). */
+/** The option that points a command at the running database (runtime/node/desktop.ts commandTargetOption). */
 export interface TargetOption {
   name: '--db-path' | '--data-dir';
   value: string;

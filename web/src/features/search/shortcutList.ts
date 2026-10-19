@@ -7,12 +7,16 @@ export interface ShortcutEntry {
   combos: string[];
   label: string;
   together?: boolean;
+  /** Only for a role that may change the space (viewers create, write and drag nothing, design §12.9). */
+  write?: boolean;
 }
 
 export interface ShortcutGroup {
   title: string;
   /** Short note under the group title. */
   note?: string;
+  /** Every entry needs the write permission. */
+  write?: boolean;
   items: ShortcutEntry[];
 }
 
@@ -22,7 +26,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
     note: 'Single-key shortcuts are paused while you type or while a dialog or menu is open.',
     items: [
       { combos: ['mod+k', '/'], label: 'Search and run commands' },
-      { combos: ['c'], label: 'New task' },
+      { combos: ['c'], label: 'New task', write: true },
       { combos: ['?'], label: 'Show keyboard shortcuts' },
       { combos: ['escape'], label: 'Close the top dialog, drawer or menu' },
     ],
@@ -47,6 +51,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
   {
     title: 'Writing',
     note: 'In the new-task dialog, comments, descriptions and work-log entries.',
+    write: true,
     items: [
       { combos: ['mod+enter'], label: 'Save, send or create' },
       { combos: ['mod+b'], label: 'Bold' },
@@ -56,6 +61,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
   },
   {
     title: 'Boards',
+    write: true,
     items: [
       { combos: ['space', 'enter'], label: 'Pick up or drop the focused card' },
       { combos: ['arrowup', 'arrowdown', 'arrowleft', 'arrowright'], label: 'Move the picked-up card', together: true },
@@ -63,6 +69,14 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
     ],
   },
 ];
+
+/** The groups and entries the space's role can use (`write`: SpacePermissions.write). */
+export function shortcutGroups(write: boolean): ShortcutGroup[] {
+  if (write) return [...SHORTCUT_GROUPS];
+  return SHORTCUT_GROUPS.filter((g) => !g.write)
+    .map((g) => ({ ...g, items: g.items.filter((i) => !i.write) }))
+    .filter((g) => g.items.length > 0);
+}
 
 const SPOKEN: Record<string, (apple: boolean) => string> = {
   mod: (apple) => (apple ? 'Command' : 'Control'),

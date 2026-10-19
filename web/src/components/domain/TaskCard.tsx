@@ -10,6 +10,7 @@ import { forwardRef, memo, useMemo, type HTMLAttributes, type MouseEvent } from 
 import type { CardColorBy } from '@shared/board';
 import type { TaskDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace } from '../../app/space';
 import { EpicBadge, MilestoneBadge, ProjectBadge, TaskRef } from './EntityBadges';
 import { statusFraction } from './entityGroups';
 import { CommentCountLabel, DueDateLabel, DurationLabel, EstimateLabel, StartDateLabel } from './MetaLabels';
@@ -43,7 +44,7 @@ export interface TaskCardProps extends Omit<HTMLAttributes<HTMLDivElement>, 'onC
   overlay?: boolean;
   /** Board-specific entries for the "⋯" menu (a function is called only when it opens). */
   extraMenuItems?: ExtraMenuItems;
-  /** Show the "⋯" menu (default true). */
+  /** Show the "⋯" menu (default true; never for a role that may not change tasks, which opens the card instead). */
   showMenu?: boolean;
 }
 
@@ -66,6 +67,7 @@ const TaskCardImpl = forwardRef<HTMLDivElement, TaskCardProps>(function TaskCard
 ) {
   const lookups = useLookups();
   const today = useSharedToday();
+  const { write } = useSpace().permissions;
   const f = useMemo(() => resolveFields(fields, DEFAULT_CARD_FIELDS), [fields]);
   const compact = density === 'compact';
 
@@ -77,7 +79,7 @@ const TaskCardImpl = forwardRef<HTMLDivElement, TaskCardProps>(function TaskCard
   const edge = taskColor(task, colorBy, lookups);
   // Compact cards get one line of the description, comfortable ones two.
   const excerpt = f.description && task.description ? markdownExcerpt(task.description, compact ? 90 : 140) : '';
-  const menu = showMenu && !overlay;
+  const menu = showMenu && !overlay && write;
 
   const showMeta = f.ref || !!project;
   const properties = [

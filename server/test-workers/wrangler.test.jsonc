@@ -1,0 +1,36 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // The Worker that the 'workers' test project (vitest.config.ts) runs in workerd, offline: the
+  // production Worker and both of its Durable Objects (entry.ts), with the bindings and migrations of
+  // the root wrangler.jsonc, and test-only objects, each listed in a migrations entry of its own.
+  // Requests in tests use https://plan.example.com. AUTH_CACHE_SECONDS is short so that a test can
+  // wait for a cached session to run out (the documented logout lag, §10.5).
+  "name": "lyren-plan-test",
+  "main": "./entry.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./fixtures/assets",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "DIRECTORY", "class_name": "DirectoryDO" },
+      { "name": "SPACES", "class_name": "SpaceDO" },
+      { "name": "TEST_DB", "class_name": "TestDbDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["DirectoryDO", "SpaceDO"] },
+    { "tag": "test-v1", "new_sqlite_classes": ["TestDbDO"] }
+  ],
+  "vars": {
+    "SETUP_TOKEN": "test",
+    "MAIL_TRANSPORT": "log",
+    "PUBLIC_URL": "https://plan.example.com",
+    "AUTH_CACHE_SECONDS": "2"
+  },
+  "send_metrics": false
+}

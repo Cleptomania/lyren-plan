@@ -8,7 +8,7 @@
 import { clsx } from 'clsx';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router';
-import { useBootstrap } from '../../api/bootstrap';
+import { useAuthStatus } from '../../api/auth';
 import { useAppEvent } from '../../lib/events';
 import { useIsMobile } from '../../lib/hooks';
 import { TaskActionsHost } from '../domain/TaskActionsHost';
@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const online = useOnline();
   // Set only by the single-file desktop app.
-  const desktop = useBootstrap().data?.desktop;
+  const desktop = useAuthStatus().data?.desktop;
   const [collapsed, setCollapsed] = usePersistentState('lyren.sidebar.collapsed', false, isBoolean);
   const [navOpen, setNavOpen] = useState(false);
   const [fullBleed, setFullBleed] = useState(0);

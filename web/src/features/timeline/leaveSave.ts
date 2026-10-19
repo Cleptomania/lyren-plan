@@ -47,8 +47,8 @@ export function listedInTimeline(timeline: TaskTimelineDTO | undefined, kind: Ti
 }
 
 /** listedInTimeline against the query cache, read at call time. */
-export function stillInTimeline(qc: QueryClient, taskId: number, kind: TimelineItemKind, id: number): boolean {
-  return listedInTimeline(qc.getQueryData<TaskTimelineDTO>(qk.timeline(taskId)), kind, id);
+export function stillInTimeline(qc: QueryClient, spaceId: string, taskId: number, kind: TimelineItemKind, id: number): boolean {
+  return listedInTimeline(qc.getQueryData<TaskTimelineDTO>(qk.timeline(spaceId, taskId)), kind, id);
 }
 
 /** A failed leave-save that only means "nothing left to save to": not worth an error toast. */

@@ -1,6 +1,6 @@
 // Toasts: <Toaster /> is mounted once (AuthedApp); call toast.success / error / info anywhere.
 //   toast.success('Task deleted', { action: { label: 'Undo', onClick: restore } })
-//   toast.error(err)  // ApiError, Error or string → readable message
+//   toast.error(err)  // ApiError, Error or string → readable message (nothing for a declined re-auth)
 //
 // Toasts draw above overlays, so Undo / Open stay reachable, and move out of the way of an open
 // panel (above a sheet, beside the desktop drawer, else to the top: toastPlacement.ts).
@@ -9,7 +9,7 @@ import { clsx } from 'clsx';
 import { CircleAlert, CircleCheck, Info, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { errorMessage } from '../../api/client';
+import { errorMessage, isReauthDeclined } from '../../api/client';
 import { getToastObstacles, subscribeToastObstacles } from './internal/toastObstacles';
 import {
   activeObstacles,
@@ -29,9 +29,14 @@ const store = createToastStore(3);
 
 export const toast = {
   success: (message: string, opts?: ToastOptions): number => store.show('success', message, opts),
-  /** Accepts a message or anything thrown (uses errorMessage from api/client). */
+  /**
+   * Accepts a message or anything thrown (uses errorMessage from api/client). A re-auth the person declined
+   * (they closed the dialog themselves) shows nothing and answers 0.
+   */
   error: (messageOrError: unknown, opts?: ToastOptions): number =>
-    store.show('error', typeof messageOrError === 'string' ? messageOrError : errorMessage(messageOrError), opts),
+    isReauthDeclined(messageOrError)
+      ? 0
+      : store.show('error', typeof messageOrError === 'string' ? messageOrError : errorMessage(messageOrError), opts),
   info: (message: string, opts?: ToastOptions): number => store.show('info', message, opts),
   dismiss: (id: number): void => store.dismiss(id),
 };

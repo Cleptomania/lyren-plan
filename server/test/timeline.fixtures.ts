@@ -1,9 +1,8 @@
 // Fixtures shared by the timeline API tests (comments, work logs, activity). Projects and
 // tasks are inserted directly so these tests don't depend on the task routes.
 
-import { SESSION_COOKIE } from '@shared/constants';
+import type { SpaceRole } from '@shared/roles';
 import type { ActivityAction, ActivityEntityType } from '@shared/types';
-import { createSession } from '../src/auth/sessions';
 import type { Db } from '../src/db';
 import { recordActivity } from '../src/services/activity';
 import type { ActivityRow } from '../src/services/rows';
@@ -33,16 +32,19 @@ export async function setupTimeline() {
   };
 }
 
-/** A second account with its own session (the app is single-owner, so this goes straight to the DB). */
-export function secondUser(ctx: TimelineContext, displayName = 'Guest'): { client: TestClient; userId: number } {
-  const now = new Date().toISOString();
-  const userId = ctx.db.run(
-    `INSERT INTO users (username, display_name, password_hash, created_at, updated_at)
-     VALUES (:username, :displayName, 'x', :now, :now)`,
-    { username: displayName.toLowerCase(), displayName, now },
-  ).lastInsertRowid;
-  const { token } = createSession(ctx.db, userId, {}, ctx.config.sessionTtlDays);
-  return { client: ctx.newClient(`${SESSION_COOKIE}=${token}`), userId };
+/**
+ * A second account, a member of the owner's space with its own session (§14.3). One space request
+ * follows, so the space's mirror holds the account's row (§3.5) before a test inserts rows for it.
+ */
+export async function secondUser(
+  ctx: TimelineContext,
+  displayName = 'Guest',
+  o: { email?: string; role?: SpaceRole } = {},
+): Promise<{ client: TestClient; userId: number }> {
+  const { client, user } = await ctx.addUser({ email: o.email ?? 'second@example.com', displayName, role: o.role ?? 'member' });
+  const synced = await client.get('/api/statuses');
+  if (synced.status !== 200) throw new Error(`mirror sync failed: ${synced.status}`);
+  return { client, userId: user.id };
 }
 
 export function activityRows(db: Db, action?: ActivityAction): ActivityRow[] {

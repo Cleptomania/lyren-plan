@@ -69,6 +69,7 @@ export const KanbanCell = memo(function KanbanCell({ lane, col, tasks, label, fi
   const { setNodeRef } = useCellDroppable(lane, col, shown.length);
   const menu = ui.menuFor(lane, col);
   const rest = tasks.length - shown.length;
+  const canAdd = showAdd && display.editable;
 
   return (
     <div
@@ -110,7 +111,7 @@ export const KanbanCell = memo(function KanbanCell({ lane, col, tasks, label, fi
       )}
       {/* Hidden, not removed, while dragging: unmounting it shifted every lane below the
           source by its height, so drop targets jumped under the pointer. */}
-      {showAdd && (
+      {canAdd && (
         <button
           type="button"
           onClick={() => ui.quickAdd(lane, col)}
@@ -154,6 +155,7 @@ function CollapsedCell({ lane, group, count }: { lane: string; group: BoardGroup
 
 function ColumnHeader({ field, group, grid, dropLane }: { field: GroupField; group: BoardGroup; grid: BoardGrid; dropLane?: string }) {
   const ui = useBoardUi();
+  const { editable } = useBoardDisplay();
   // Single-lane layouts: dropping on the header moves the card without a position.
   const { setNodeRef } = useCellDroppable(dropLane ?? NO_LANE, group.key, null, `head:${dropLane ?? NO_LANE}|${group.key}`);
   return (
@@ -164,7 +166,7 @@ function ColumnHeader({ field, group, grid, dropLane }: { field: GroupField; gro
       </h3>
       <GroupCount count={group.count} wip={grid.wip.get(group.key)} />
       <span className="flex-1" />
-      <IconButton size="sm" aria-label={`Add task to ${group.label}`} icon={<Plus />} onClick={() => ui.quickAdd(NO_LANE, group.key)} />
+      {editable && <IconButton size="sm" aria-label={`Add task to ${group.label}`} icon={<Plus />} onClick={() => ui.quickAdd(NO_LANE, group.key)} />}
       <LazyMenu
         label={`${group.label} column`}
         build={() => ui.groupMenu('columns', group)}
@@ -363,6 +365,7 @@ function MobileLaneSection({
   light: boolean;
 }) {
   const ui = useBoardUi();
+  const { editable } = useBoardDisplay();
   const tasks = cellTasks(grid, lane.key, col.key);
   // Empty lanes stay one compact row (with "+"); that row takes drops.
   const compact = tasks.length === 0 && !lane.collapsed;
@@ -370,7 +373,7 @@ function MobileLaneSection({
     <>
       <LaneToggle field={fields.laneField} lane={{ ...lane, count: tasks.length }} />
       <span className="flex-1" />
-      {compact && (
+      {compact && editable && (
         <IconButton size="sm" aria-label={`Add task to ${lane.label} · ${col.label}`} icon={<Plus />} onClick={() => ui.quickAdd(lane.key, col.key)} />
       )}
     </>

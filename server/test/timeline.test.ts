@@ -12,7 +12,7 @@ describe('GET /api/tasks/:id/timeline', () => {
 
   it('lists comments oldest first with their authors', async () => {
     const ctx = await setupTimeline();
-    const guest = secondUser(ctx, 'Robin');
+    const guest = await secondUser(ctx, 'Robin');
     const later = insertComment(ctx.db, { taskId: ctx.taskId, userId: ctx.user.id, body: 'later', createdAt: '2026-10-02T10:00:00.000Z' });
     const earlier = insertComment(ctx.db, { taskId: ctx.taskId, userId: guest.userId, body: 'earlier', createdAt: '2026-10-01T10:00:00.000Z' });
     const other = ctx.addTask();
@@ -27,6 +27,9 @@ describe('GET /api/tasks/:id/timeline', () => {
       createdAt: '2026-10-01T10:00:00.000Z',
       updatedAt: '2026-10-01T10:00:00.000Z',
       editedAt: null,
+      // §7.4: comments carry their import provenance (§8.6), none for a comment written here.
+      importedBy: null,
+      importedAt: null,
     });
   });
 

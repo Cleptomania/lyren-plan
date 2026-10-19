@@ -3,5 +3,6 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["shared/src", "server/src", "server/test", "vitest.config.ts"]
+  "include": ["shared/src", "server/src", "server/test", "vitest.config.ts"],
+  "exclude": ["server/src/runtime/cloudflare", "server/test-workers"]
 }

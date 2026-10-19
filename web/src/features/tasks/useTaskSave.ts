@@ -4,7 +4,8 @@ import { useMutationState } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import type { TaskUpdateInput } from '@shared/schemas';
 import type { TaskDTO } from '@shared/types';
-import { UPDATE_TASK_MUTATION_KEY, useUpdateTask } from '../../api/tasks';
+import { updateTaskMutationKey, useUpdateTask } from '../../api/tasks';
+import { useSpaceId } from '../../app/space';
 import { toast } from '../../components/ui';
 
 export interface SaveOptions {
@@ -37,8 +38,9 @@ export function useTaskSave(taskId: number): (patch: TaskUpdateInput, opts?: Sav
 
 /** True while an update of this task is in flight (for a "Saving…" hint). */
 export function useTaskSaving(taskId: number): boolean {
+  const sid = useSpaceId();
   const pending = useMutationState({
-    filters: { mutationKey: UPDATE_TASK_MUTATION_KEY, status: 'pending' },
+    filters: { mutationKey: updateTaskMutationKey(sid), status: 'pending' },
     select: (m) => (m.state.variables as { id?: number } | undefined)?.id,
   });
   return pending.includes(taskId);

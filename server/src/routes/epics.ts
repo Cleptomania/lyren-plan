@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { DEFAULT_EPIC_COLOR } from '@shared/constants';
 import { epicCreateInput, epicUpdateInput, reorderInput } from '@shared/schemas';
-import { currentUser } from '../auth/context';
+import { fold } from '../core/fold';
 import type { Db } from '../db';
 import type { AppEnv, Deps } from '../env';
 import { badRequest } from '../http/errors';
@@ -14,6 +14,7 @@ import { rewriteBoardRefs } from '../services/boardRefs';
 import { getEpic, nextPosition, requireEpic } from '../services/entities';
 import type { EpicRow, TaskRow } from '../services/rows';
 import { nowIso } from '../services/sql';
+import { currentUser } from '../space/context';
 import { assertDateOrder, nextCompletedAt, reorderWithinProject, requireParentProject } from './milestones';
 
 const isClosedEpic = (status: EpicRow['status']) => status === 'done' || status === 'cancelled';
@@ -45,15 +46,17 @@ export function epicRoutes({ db }: Deps) {
       const status = input.status ?? 'open';
       const now = nowIso();
       const epicId = db.run(
-        `INSERT INTO epics (project_id, milestone_id, name, description, color, status, start_date, due_date, position,
-                            completed_at, created_at, updated_at)
-         VALUES (:projectId, :milestoneId, :name, :description, :color, :status, :startDate, :dueDate, :position,
-                 :completedAt, :now, :now)`,
+        `INSERT INTO epics (project_id, milestone_id, name, name_fold, description, description_fold, color, status,
+                            start_date, due_date, position, completed_at, created_at, updated_at)
+         VALUES (:projectId, :milestoneId, :name, :nameFold, :description, :descriptionFold, :color, :status,
+                 :startDate, :dueDate, :position, :completedAt, :now, :now)`,
         {
           projectId: input.projectId,
           milestoneId,
           name: input.name,
+          nameFold: fold(input.name),
           description: input.description ?? '',
+          descriptionFold: fold(input.description ?? ''),
           color: input.color ?? DEFAULT_EPIC_COLOR,
           status,
           startDate,
@@ -111,14 +114,17 @@ export function epicRoutes({ db }: Deps) {
       after.completed_at = nextCompletedAt(isClosedEpic(after.status), before.completed_at, now);
       db.run(
         `UPDATE epics
-            SET milestone_id = :milestoneId, name = :name, description = :description, color = :color, status = :status,
-                start_date = :startDate, due_date = :dueDate, completed_at = :completedAt, updated_at = :now
+            SET milestone_id = :milestoneId, name = :name, name_fold = :nameFold, description = :description,
+                description_fold = :descriptionFold, color = :color, status = :status, start_date = :startDate,
+                due_date = :dueDate, completed_at = :completedAt, updated_at = :now
           WHERE id = :id`,
         {
           id,
           milestoneId: after.milestone_id,
           name: after.name,
+          nameFold: fold(after.name),
           description: after.description,
+          descriptionFold: fold(after.description),
           color: after.color,
           status: after.status,
           startDate: after.start_date,

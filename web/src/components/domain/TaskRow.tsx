@@ -6,13 +6,14 @@
 //   max(12rem, 40%); metadata that does not fit drops out chip by chip, tags first, never
 //   cut mid-word.
 // - Narrow (phones, narrow columns): status + two-line title, metadata wrapped underneath.
-// Status and priority are editable in place (optimistic, toast on error).
+// Status and priority are editable in place (optimistic, toast on error), for those who may change tasks.
 
 import { clsx } from 'clsx';
 import { Archive } from 'lucide-react';
 import { forwardRef, memo, useMemo, type ButtonHTMLAttributes, type HTMLAttributes, type MouseEvent } from 'react';
 import type { TaskDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace } from '../../app/space';
 import { Checkbox } from '../ui';
 import { EpicBadge, MilestoneBadge, ProjectBadge, TaskRef } from './EntityBadges';
 import { statusFraction } from './entityGroups';
@@ -48,11 +49,11 @@ export interface TaskRowProps extends Omit<HTMLAttributes<HTMLDivElement>, 'onCl
   compact?: boolean;
   /** Show the task ref (default true). */
   showRef?: boolean;
-  /** Status / priority icons open pickers (default true). */
+  /** Status / priority icons open pickers (default true; never for a role that may not change tasks). */
   editable?: boolean;
   /** Extra entries for the "⋯" menu (a function is called only when it opens). */
   extraMenuItems?: ExtraMenuItems;
-  /** Show the "⋯" menu (default true). */
+  /** Show the "⋯" menu (default true; never for a role that may not change tasks, which opens the row instead). */
   showMenu?: boolean;
   /** Highlight (e.g. the task open in the drawer). */
   active?: boolean;
@@ -93,7 +94,7 @@ const TaskRowImpl = forwardRef<HTMLDivElement, TaskRowProps>(function TaskRow(
     onSelectedChange,
     compact = false,
     showRef = true,
-    editable = true,
+    editable: editableProp = true,
     extraMenuItems,
     showMenu = true,
     active = false,
@@ -105,6 +106,9 @@ const TaskRowImpl = forwardRef<HTMLDivElement, TaskRowProps>(function TaskRow(
 ) {
   const lookups = useLookups();
   const today = useSharedToday();
+  // Viewers see the pickers' values only (design §12.9).
+  const { write } = useSpace().permissions;
+  const editable = editableProp && write;
   const hideKey = hide?.join(',') ?? '';
   // hideKey stands in for `hide`, which callers often pass as an inline array.
   const f = useMemo(() => resolveRowFields(fields, hide, showRef), [fields, hideKey, showRef]);
@@ -245,7 +249,7 @@ const TaskRowImpl = forwardRef<HTMLDivElement, TaskRowProps>(function TaskRow(
           </div>
         </div>
 
-        {showMenu && (
+        {showMenu && write && (
           <span data-no-open className="-my-1 flex shrink-0 @min-[35rem]:my-0" {...stopCardEvents}>
             <TaskActionsMenu
               task={task}

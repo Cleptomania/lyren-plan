@@ -1,4 +1,5 @@
-// Phone (< md) navigation: bottom tab bar, the "More" sheet and the floating "+" button.
+// Phone (< md) navigation: bottom tab bar, the "More" sheet (with the space switcher's row, design §12.9)
+// and the floating "+" button (not for viewers).
 
 import { clsx } from 'clsx';
 import {
@@ -13,14 +14,19 @@ import {
   Plus,
   Search,
   Settings,
+  Shield,
   SquareKanban,
   Sun,
   Timer,
+  UserRoundCog,
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
+import { useAccount } from '../../api/auth';
 import { useLookups } from '../../api/bootstrap';
+import { ROLE_LABELS } from '../../app/permissions';
+import { useSpace, useSpacePath } from '../../app/space';
 import { openCommandPalette, openCreateTask } from '../../lib/events';
 import { useOverlayStackSize } from '../../lib/overlays';
 import type { ThemePreference } from '../../lib/theme';
@@ -31,6 +37,7 @@ import { useOverlayControls, type OverlayControls } from '../ui/internal/overlay
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { Sheet } from '../ui/Sheet';
 import { mobileTabForPath } from './navigation';
+import { SpaceSheet, SpaceTile } from './SpaceSwitcher';
 import { useCreateTaskDefaults, useSignOut } from './useShellActions';
 import { useTextEntryFocused, useThemePreference } from './useShellState';
 
@@ -40,6 +47,9 @@ export interface MobileNavProps {
 }
 
 export function MobileNav({ navOpen, setNavOpen }: MobileNavProps) {
+  const sp = useSpacePath();
+  const { write } = useSpace().permissions;
+  const [spacesOpen, setSpacesOpen] = useState(false);
   const { pathname, search, key } = useLocation();
   const navigate = useNavigate();
   const typing = useTextEntryFocused(true);
@@ -96,9 +106,9 @@ export function MobileNav({ navOpen, setNavOpen }: MobileNavProps) {
         )}
       >
         <ul className="flex h-14 items-stretch">
-          <Tab to="/dashboard" label="Home" icon={<House />} active={current === 'home'} muted={navOpen} behindSheet={navOpen} onLinkClick={fromSheet('/dashboard')} />
-          <Tab to="/projects" label="Projects" icon={<FolderKanban />} active={current === 'projects'} muted={navOpen} behindSheet={navOpen} onLinkClick={fromSheet('/projects')} />
-          <Tab to="/boards" label="Boards" icon={<SquareKanban />} active={current === 'boards'} muted={navOpen} behindSheet={navOpen} onLinkClick={fromSheet('/boards')} />
+          <Tab to={sp('/dashboard')} label="Home" icon={<House />} active={current === 'home'} muted={navOpen} behindSheet={navOpen} onLinkClick={fromSheet(sp('/dashboard'))} />
+          <Tab to={sp('/projects')} label="Projects" icon={<FolderKanban />} active={current === 'projects'} muted={navOpen} behindSheet={navOpen} onLinkClick={fromSheet(sp('/projects'))} />
+          <Tab to={sp('/boards')} label="Boards" icon={<SquareKanban />} active={current === 'boards'} muted={navOpen} behindSheet={navOpen} onLinkClick={fromSheet(sp('/boards'))} />
           <Tab label="Search" icon={<Search />} behindSheet={navOpen} onClick={openSearch} />
           <Tab
             label="More"
@@ -110,8 +120,14 @@ export function MobileNav({ navOpen, setNavOpen }: MobileNavProps) {
           />
         </ul>
       </nav>
-      {!typing && overlays === 0 && <Fab />}
-      <NavSheet open={navOpen} onClose={() => setNavOpen(false)} controlsRef={sheet} />
+      {write && !typing && overlays === 0 && <Fab />}
+      <NavSheet
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
+        controlsRef={sheet}
+        onSwitchSpace={() => sheet.current?.closeThen(() => setSpacesOpen(true))}
+      />
+      <SpaceSheet open={spacesOpen} onClose={() => setSpacesOpen(false)} />
     </>
   );
 }
@@ -184,8 +200,22 @@ const THEME_OPTIONS = [
 ] as const satisfies ReadonlyArray<{ value: ThemePreference; label: string; icon: ReactNode }>;
 
 /** The "More" sheet: secondary destinations, theme and sign out. */
-function NavSheet({ open, onClose, controlsRef }: { open: boolean; onClose: () => void; controlsRef: RefObject<OverlayControls | null> }) {
+function NavSheet({
+  open,
+  onClose,
+  controlsRef,
+  onSwitchSpace,
+}: {
+  open: boolean;
+  onClose: () => void;
+  controlsRef: RefObject<OverlayControls | null>;
+  /** The "Space" row: the More sheet closes and the space list opens. */
+  onSwitchSpace: () => void;
+}) {
+  const sp = useSpacePath();
+  const space = useSpace();
   const { user, version } = useLookups();
+  const account = useAccount();
   const [theme, setTheme, syncTheme] = useThemePreference();
   const signOut = useSignOut();
   useEffect(() => {
@@ -201,15 +231,33 @@ function NavSheet({ open, onClose, controlsRef }: { open: boolean; onClose: () =
         <Avatar name={user.displayName} size="lg" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[15px] font-semibold text-fg">{user.displayName}</p>
-          <p className="truncate text-[13px] text-fg-muted">@{user.username}</p>
+          <p className="truncate text-[13px] text-fg-muted">{account.email ?? account.username}</p>
         </div>
         {/* For screen readers and the keyboard (Esc works too): the tab bar is behind the sheet for them. */}
         <IconButton aria-label="Close" tooltip={false} icon={<X />} onClick={onClose} className="-mr-2 shrink-0 self-start" />
       </div>
+      <div className="border-t border-border py-1">
+        <button
+          type="button"
+          onClick={onSwitchSpace}
+          aria-haspopup="dialog"
+          className="flex min-h-12 w-full items-center gap-3 px-4 text-left text-[15px] text-fg active:bg-surface-2 [&_svg]:size-5 [&_svg]:shrink-0"
+        >
+          <SpaceTile name={space.name} className="size-5" />
+          <span className="min-w-0 flex-1 truncate">
+            <span className="text-fg-muted">Space: </span>
+            {space.name}
+          </span>
+          <span className="shrink-0 text-[13px] text-fg-muted">{ROLE_LABELS[space.role]}</span>
+          <ChevronRight aria-hidden className="text-fg-subtle" />
+        </button>
+      </div>
       <div className="border-y border-border py-1">
-        <SheetLink to="/activity" icon={<Activity />} label="Activity" onNavigate={onClose} />
-        <SheetLink to="/worklog" icon={<Timer />} label="Work log" onNavigate={onClose} />
-        <SheetLink to="/settings" icon={<Settings />} label="Settings" onNavigate={onClose} />
+        <SheetLink to={sp('/activity')} icon={<Activity />} label="Activity" onNavigate={onClose} />
+        <SheetLink to={sp('/worklog')} icon={<Timer />} label="Work log" onNavigate={onClose} />
+        <SheetLink to={sp('/settings')} icon={<Settings />} label="Settings" onNavigate={onClose} />
+        <SheetLink to="/settings" icon={<UserRoundCog />} label="Account settings" onNavigate={onClose} />
+        {account.isInstanceAdmin && <SheetLink to="/admin" icon={<Shield />} label="Administration" onNavigate={onClose} />}
       </div>
       <div className="flex items-center justify-between gap-3 px-4 py-3">
         <span className="text-[15px] text-fg">Theme</span>

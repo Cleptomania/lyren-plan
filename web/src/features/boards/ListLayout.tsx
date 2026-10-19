@@ -64,7 +64,9 @@ const ListSection = memo(function ListSection({ field, group, tasks, grid }: { f
           </h3>
           <GroupCount count={group.count} wip={grid.wip.get(group.key)} />
         </button>
-        <IconButton size="sm" aria-label={`Add task to ${group.label}`} icon={<Plus />} onClick={() => ui.quickAdd(NO_LANE, group.key)} />
+        {display.editable && (
+          <IconButton size="sm" aria-label={`Add task to ${group.label}`} icon={<Plus />} onClick={() => ui.quickAdd(NO_LANE, group.key)} />
+        )}
         <LazyMenu
           label={`${group.label} group`}
           build={() => ui.groupMenu('columns', group)}

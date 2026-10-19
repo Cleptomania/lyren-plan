@@ -1,8 +1,11 @@
 // Small pure text helpers used by UI components.
 
-/** Up to two initials from a display name: 'Ada Lovelace' → 'AL', 'darren' → 'DA'. */
+/**
+ * Up to two initials from a display name: 'Ada Lovelace' → 'AL', 'grace' → 'GR', 'Unknown (imported)' → 'UI'
+ * (brackets and quotes are no part of a word).
+ */
 export function initials(name: string): string {
-  const words = name.trim().split(/[\s._-]+/u).filter(Boolean);
+  const words = name.trim().split(/[\s._\-()[\]{}"'“”‘’]+/u).filter(Boolean);
   if (words.length === 0) return '?';
   if (words.length === 1) {
     const chars = Array.from(words[0]!);

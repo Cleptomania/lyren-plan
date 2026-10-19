@@ -1,12 +1,13 @@
-# Builds, tests and publishes Lyren Plan's single-file apps (scripts/package.mjs) as a GitHub
-# Release. See README.md, "Releases".
+# Builds, tests and publishes Lyren Plan's single-file apps (scripts/package.mjs) and the archive for
+# Node.js installs (scripts/pack-node.mjs) as a GitHub Release. See README.md, "Releases".
 #
-#   Push of a tag v<version>   build and test on Linux, smoke-test the Windows exe on Windows, then
-#                              publish the release "Lyren Plan <version>": both binaries, their
-#                              .sha256 files and SHA256SUMS. The tag must be v + the version in
-#                              package.json.
-#   Actions -> Run workflow    the same build and smoke test as a dry run: nothing is published; the
-#                              binaries are kept as an artifact of the run (3 days; 7 for a tag) and
+#   Push of a tag v<version>   build and test on Linux (the server's tests on the oldest Node.js
+#                              too), smoke-test the Windows exe on Windows and the Node.js archive
+#                              on Linux, then publish the release "Lyren Plan <version>": both
+#                              binaries, the archive, their .sha256 files and SHA256SUMS. The tag
+#                              must be v + the version in package.json.
+#   Actions -> Run workflow    the same build and smoke tests as a dry run: nothing is published; the
+#                              files are kept as an artifact of the run (3 days; 7 for a tag) and
 #                              the summary shows the release notes.
 #
 # Security: the token can only read, except in the job that publishes; only GitHub's own actions,
@@ -73,6 +74,14 @@ jobs:
       - name: Typecheck, test and build
         run: npm run check
 
+      # --no-build: pack the dist/ that npm run check has just built. Every entry of the archive gets
+      # the time of the commit (SOURCE_DATE_EPOCH), so the same build gives the same archive.
+      - name: Package for Node.js installs
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          node scripts/pack-node.mjs --no-build
+
       # --no-build: package the dist/ that npm run check has just built.
       - name: Package the Windows app
         run: node scripts/package.mjs --target win-x64 --no-build
@@ -87,7 +96,7 @@ jobs:
       - name: Package the Linux app
         run: node scripts/package.mjs --target linux-x64 --no-build
 
-      - name: Keep the binaries
+      - name: Keep the binaries and the archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lyren-plan-${{ steps.version.outputs.version }}
@@ -96,10 +105,38 @@ jobs:
             dist/lyren-plan-${{ steps.version.outputs.version }}-win-x64.exe.sha256
             dist/lyren-plan-${{ steps.version.outputs.version }}-linux-x64
             dist/lyren-plan-${{ steps.version.outputs.version }}-linux-x64.sha256
+            dist/lyren-plan-${{ steps.version.outputs.version }}-node.tar.gz
+            dist/lyren-plan-${{ steps.version.outputs.version }}-node.tar.gz.sha256
           if-no-files-found: error
           # A tag push: long enough to re-run a failed smoke test or release job. A dry run: long
           # enough to try the binaries, without keeping about 75 MB per run for a week.
           retention-days: ${{ github.event_name == 'push' && 7 || 3 }}
+
+  # The server's tests on the oldest Node.js that package.json allows ("engines"; a test in
+  # scripts/test/node-tarball.test.mjs keeps the two the same), whose node:sqlite differs: no URI file
+  # names, no limits or authorizer. They upgrade the 1.x fixture and apply staged restores, so the
+  # upgrade and restore code runs on it in every run, without a previous release.
+  test-oldest-node:
+    name: Test on Node.js 22.13.0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22.13.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.13.0'
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Test (the node project)
+        run: npx vitest run --project node
 
   smoke-windows:
     name: Smoke test on Windows
@@ -121,18 +158,95 @@ jobs:
           path: dist
 
       # The same script in both PowerShells, as people run it by hand. Each run gets a new folder
-      # and port; the script checks the exe against its .sha256 file first.
+      # and port; the script checks the exe against its .sha256 file first, and ends with the upgrade
+      # check from the previous release (skipped with a notice when there is none): the first run stops
+      # the previous release cleanly, the second ends it as a crash would (-CrashPrevious), so the
+      # upgrade starts from its -wal and -shm. The upgrade check downloads the previous release's exe
+      # with gh: only these steps get the read-only token, and the script keeps it from the programs
+      # it starts.
       - name: Smoke test (PowerShell 7)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: ./scripts/ci/smoke-windows.ps1 -Exe "dist\lyren-plan-$($env:VERSION)-win-x64.exe" -WorkDir "$env:RUNNER_TEMP\smoke-pwsh" -Port 43871
 
       - name: Smoke test (Windows PowerShell 5.1)
         shell: powershell
-        run: ./scripts/ci/smoke-windows.ps1 -Exe "dist\lyren-plan-$($env:VERSION)-win-x64.exe" -WorkDir "$env:RUNNER_TEMP\smoke-powershell" -Port 43872
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ./scripts/ci/smoke-windows.ps1 -Exe "dist\lyren-plan-$($env:VERSION)-win-x64.exe" -WorkDir "$env:RUNNER_TEMP\smoke-powershell" -Port 43872 -CrashPrevious
+
+  # The Node.js archive on Linux: scripts/ci/smoke-node.sh checks it against its .sha256 file and its
+  # entries (all below lyren-plan-<version>/, root-owned, no source maps), extracts it, runs help,
+  # starts server.mjs with a new data folder and its own port, checks /api/health, / and a backup
+  # set, and stops it with SIGTERM (exit code 0, port closed, database closed); restores that set
+  # (staged, then applied by the next start); then the upgrade check: the previous release's archive
+  # (gh release download) makes a 1.x database, which this build must upgrade and the previous
+  # release then refuse (skipped with a notice without one).
+  smoke-node:
+    name: Smoke test (${{ matrix.name }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest Node.js that package.json allows ("engines"; a test in
+          # scripts/test/node-tarball.test.mjs keeps the two the same).
+          - name: Node.js 22.13.0
+            os: ubuntu-24.04
+            node: '22.13.0'
+          # What docs/ubuntu-server.md installs: Ubuntu's own nodejs package, /usr/bin/node. The
+          # image's preinstalled Node.js (/usr/local/bin) comes first on PATH, hence the full path.
+          - name: Ubuntu 26.04 nodejs package
+            os: ubuntu-26.04
+            node: ubuntu
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Check out (for the smoke test script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js ${{ matrix.node }}
+        if: matrix.node != 'ubuntu'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      # The image's own Node.js comes from tj/n (/usr/local), not from apt; the log shows where
+      # /usr/bin/node comes from.
+      - name: Install Ubuntu's nodejs package
+        if: matrix.node == 'ubuntu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nodejs
+          apt-cache policy nodejs
+          dpkg --search /usr/bin/node
+
+      - name: Download the binaries and the archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lyren-plan-${{ needs.build.outputs.version }}
+          path: dist
+
+      # The upgrade check downloads the previous release's archive with gh: only this step gets the
+      # read-only token, and the script starts the servers with env -i, so they never see it.
+      - name: Smoke test
+        env:
+          NODE_BIN: ${{ matrix.node == 'ubuntu' && '/usr/bin/node' || 'node' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/ci/smoke-node.sh --node "$NODE_BIN" "dist/lyren-plan-$VERSION-node.tar.gz" "$RUNNER_TEMP/smoke-node" 43881
 
   release:
     name: Publish the release
-    needs: [build, smoke-windows]
+    needs: [build, test-oldest-node, smoke-windows, smoke-node]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -148,7 +262,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download the binaries
+      - name: Download the binaries and the archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: lyren-plan-${{ needs.build.outputs.version }}
@@ -159,7 +273,7 @@ jobs:
 
   release-dry-run:
     name: Release notes (dry run)
-    needs: [build, smoke-windows]
+    needs: [build, test-oldest-node, smoke-windows, smoke-node]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -171,7 +285,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download the binaries
+      - name: Download the binaries and the archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: lyren-plan-${{ needs.build.outputs.version }}

@@ -7,6 +7,7 @@ import type { z } from 'zod';
 import { isClosedCategory, LIMITS } from '@shared/constants';
 import type { taskBulkPatchSchema, taskCreateInput, taskUpdateInput } from '@shared/schemas';
 import type { TagRef, TaskDTO } from '@shared/types';
+import { fold } from '../core/fold';
 import type { Db } from '../db';
 import { badRequest } from '../http/errors';
 import { recordActivity, taskChanges } from './activity';
@@ -68,13 +69,15 @@ function taskTags(db: Db, taskId: number): TagRef[] {
     .map(toTagRef);
 }
 
+/**
+ * Make the task's tags exactly `tagIds`, writing only the rows that change: every row written is billed on
+ * Cloudflare, and each also rewrites the task's tag list (tasks.tag_ids, by trigger).
+ */
 function replaceTaskTags(db: Db, taskId: number, tagIds: readonly number[]): void {
-  db.run('DELETE FROM task_tags WHERE task_id = :taskId', { taskId });
+  const ids = jsonList(tagIds);
+  db.run(`DELETE FROM task_tags WHERE task_id = :taskId AND tag_id NOT IN (SELECT value FROM json_each(:ids))`, { taskId, ids });
   if (tagIds.length > 0) {
-    db.run(
-      `INSERT INTO task_tags (task_id, tag_id) SELECT :taskId, value FROM json_each(:tagIds)`,
-      { taskId, tagIds: jsonList(tagIds) },
-    );
+    db.run(`INSERT OR IGNORE INTO task_tags (task_id, tag_id) SELECT :taskId, value FROM json_each(:ids)`, { taskId, ids });
   }
 }
 
@@ -82,10 +85,17 @@ function projectKey(db: Db, projectId: number): string {
   return db.get<{ key: string }>('SELECT key FROM projects WHERE id = :id', { id: projectId })!.key;
 }
 
-const TASK_INSERT = `INSERT INTO tasks (project_id, number, epic_id, status_id, title, description, priority, start_date,
-                     due_date, estimate, rank, completed_at, archived_at, created_by, created_at, updated_at)
-  VALUES (:project_id, :number, :epic_id, :status_id, :title, :description, :priority, :start_date,
-          :due_date, :estimate, :rank, :completed_at, :archived_at, :created_by, :created_at, :updated_at)`;
+const TASK_INSERT = `INSERT INTO tasks (project_id, number, epic_id, status_id, title, title_fold, description, description_fold,
+                     priority, start_date, due_date, estimate, rank, completed_at, archived_at, created_by, created_at,
+                     updated_at)
+  VALUES (:project_id, :number, :epic_id, :status_id, :title, :title_fold, :description, :description_fold,
+          :priority, :start_date, :due_date, :estimate, :rank, :completed_at, :archived_at, :created_by, :created_at,
+          :updated_at)`;
+
+/** The fold columns of a task's title and description (TASK_INSERT, the full UPDATE; design §3.4). */
+function taskFolds(values: Pick<TaskRow, 'title' | 'description'>): Pick<TaskRow, 'title_fold' | 'description_fold'> {
+  return { title_fold: fold(values.title), description_fold: fold(values.description) };
+}
 
 // ---------------------------------------------------------------------------
 // Create
@@ -108,7 +118,7 @@ export function createTaskRow(db: Db, actor: MutationActor, input: TaskCreateDat
     const number = nextTaskNumber(db, project.id);
     const now = nowIso();
 
-    const id = db.run(TASK_INSERT, {
+    const values = {
       project_id: project.id,
       number,
       epic_id: input.epicId ?? null,
@@ -125,7 +135,8 @@ export function createTaskRow(db: Db, actor: MutationActor, input: TaskCreateDat
       created_by: actor.userId,
       created_at: now,
       updated_at: now,
-    }).lastInsertRowid;
+    };
+    const id = db.run(TASK_INSERT, { ...values, ...taskFolds(values) }).lastInsertRowid;
     replaceTaskTags(
       db,
       id,
@@ -279,11 +290,12 @@ export function applyTaskUpdate(
     after.updated_at = now;
     db.run(
       `UPDATE tasks SET project_id = :project_id, number = :number, epic_id = :epic_id, status_id = :status_id,
-              title = :title, description = :description, priority = :priority, start_date = :start_date,
+              title = :title, title_fold = :title_fold, description = :description,
+              description_fold = :description_fold, priority = :priority, start_date = :start_date,
               due_date = :due_date, estimate = :estimate, rank = :rank, completed_at = :completed_at,
               archived_at = :archived_at, updated_at = :updated_at
         WHERE id = :id`,
-      { ...after },
+      { ...after, ...taskFolds(after) },
     );
     if (changes.some((c) => c.field === 'tags')) {
       replaceTaskTags(
@@ -414,7 +426,7 @@ export function duplicateTask(db: Db, actor: MutationActor, id: number): TaskDTO
     const number = nextTaskNumber(db, original.project_id);
     const now = nowIso();
     const title = copyTitle(original.title);
-    const copyId = db.run(TASK_INSERT, {
+    const copy = {
       ...original,
       number,
       status_id: statusId,
@@ -426,7 +438,8 @@ export function duplicateTask(db: Db, actor: MutationActor, id: number): TaskDTO
       created_by: actor.userId,
       created_at: now,
       updated_at: now,
-    }).lastInsertRowid;
+    };
+    const copyId = db.run(TASK_INSERT, { ...copy, ...taskFolds(copy) }).lastInsertRowid;
     db.run('INSERT INTO task_tags (task_id, tag_id) SELECT :copyId, tag_id FROM task_tags WHERE task_id = :id', {
       copyId,
       id: original.id,

@@ -1,11 +1,13 @@
 // Epics of one group (a milestone, or "without milestone") with progress, inline status,
-// menu and manual order. On the overview each epic expands to show its tasks.
+// menu and manual order (not for viewers, design §12.9). On the overview each epic expands to show its
+// tasks.
 
 import { clsx } from 'clsx';
 import { ChevronRight, MoreHorizontal } from 'lucide-react';
 import { useCallback, useId } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { EpicDTO, MilestoneDTO } from '@shared/types';
+import { useSpace, useSpaceId } from '../../app/space';
 import { EpicDot } from '../../components/domain';
 import { IconButton, Menu, toast } from '../../components/ui';
 import { epicUrl } from '../../lib/taskLinks';
@@ -48,6 +50,8 @@ export function EpicList({
   onExpandedChange,
   emptyText = 'No epics yet.',
 }: EpicListProps) {
+  const sid = useSpaceId();
+  const { write } = useSpace().permissions;
   const navigate = useNavigate();
   const reorder = useReorder('epics');
   const save = useSaveEpic();
@@ -69,6 +73,7 @@ export function EpicList({
         getId={epicId}
         getLabel={epicName}
         noun="epics"
+        disabled={!write}
         onMove={(activeId, overId) => apply(reorderSubset(allEpicIds, groupIds, activeId, overId))}
         renderItem={(epic, sortable) => (
           <EpicRow
@@ -79,8 +84,8 @@ export function EpicList({
             expanded={expandable && (isExpanded?.(epic.id) ?? false)}
             onExpandedChange={(open) => onExpandedChange?.(epic.id, open)}
             onStatus={(status) => void save(epic, { status })}
-            menu={epicMenuItems(epic, {
-              open: () => navigate(epicUrl(projectId, epic.id)),
+            menu={write && epicMenuItems(epic, {
+              open: () => navigate(epicUrl(sid, projectId, epic.id)),
               edit: () => dialogs.editEpic(epic),
               setStatus: (status) => void save(epic, { status }),
               milestones,
@@ -123,8 +128,10 @@ function EpicRow({
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onStatus: (status: EpicDTO['status']) => void;
-  menu: ReturnType<typeof epicMenuItems>;
+  /** false: the role may not change the epic (no menu). */
+  menu: ReturnType<typeof epicMenuItems> | false;
 }) {
+  const sid = useSpaceId();
   const panelId = useId();
   const closed = isEpicClosed(epic.status);
   const statusPicker = <LifecyclePicker kind="epic" value={epic.status} onChange={onStatus} subject={epic.name} />;
@@ -155,7 +162,7 @@ function EpicRow({
             <EpicDot color={epic.color} />
             {/* Touch: a 40px tall target over the whole name line (padding cancelled by margins). */}
             <Link
-              to={epicUrl(projectId, epic.id)}
+              to={epicUrl(sid, projectId, epic.id)}
               className={clsx(
                 'min-w-0 truncate text-sm font-medium hover:underline pointer-coarse:-my-2.5 pointer-coarse:flex-1 pointer-coarse:py-2.5',
                 closed ? 'text-fg-muted' : 'text-fg',
@@ -175,11 +182,13 @@ function EpicRow({
         </div>
         <div className="flex shrink-0 items-center gap-0.5 pt-1.5">
           <span className="hidden md:inline-flex">{statusPicker}</span>
-          <Menu
-            label={epic.name}
-            items={menu}
-            trigger={<IconButton size="sm" aria-label={`Actions for ${epic.name}`} icon={<MoreHorizontal />} tooltip={false} className="-my-1" />}
-          />
+          {menu && (
+            <Menu
+              label={epic.name}
+              items={menu}
+              trigger={<IconButton size="sm" aria-label={`Actions for ${epic.name}`} icon={<MoreHorizontal />} tooltip={false} className="-my-1" />}
+            />
+          )}
         </div>
       </div>
       {expandable && (

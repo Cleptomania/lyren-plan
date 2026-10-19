@@ -1,4 +1,5 @@
-// Property panel of the task detail: every row is a domain picker that saves immediately.
+// Property panel of the task detail: every row is a domain picker that saves immediately, or shows
+// its value only (readOnly: a role that may not change tasks, design §12.9).
 
 import { Fragment, type ReactNode } from 'react';
 import type { TaskUpdateInput } from '@shared/schemas';
@@ -22,19 +23,21 @@ import { ignoreRejection } from './useTaskSave';
 export interface TaskPropertiesProps {
   task: TaskDTO;
   save: (patch: TaskUpdateInput, opts?: SaveOptions) => Promise<TaskDTO>;
+  /** The pickers show their values and do not open. */
+  readOnly?: boolean;
 }
 
 /**
  * Desktop: a labelled list (label column + full-width value buttons). Phones: a compact
  * wrap of bordered chips (each button's accessible name still includes its label).
  */
-export function TaskProperties({ task, save }: TaskPropertiesProps) {
+export function TaskProperties({ task, save, readOnly = false }: TaskPropertiesProps) {
   const { statusById, projectById } = useLookups();
   const compact = useIsMobile();
   const closed = taskIsClosed(task, statusById);
   const run = (patch: TaskUpdateInput, opts?: SaveOptions) => ignoreRejection(save(patch, opts));
   const tagIds = task.tags.map((t) => t.id);
-  const fullWidth = compact ? ({ bordered: true } as const) : ({ fullWidth: true } as const);
+  const fullWidth = { ...(compact ? { bordered: true } : { fullWidth: true }), ...(readOnly && { readOnly: true }) };
   const Row = compact ? ChipRow : ListRow;
 
   const rows = (

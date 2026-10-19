@@ -3,11 +3,12 @@
 #
 #   scripts/ci/publish-release.sh [--dry-run] <tag> <version> <folder>
 #
-# <folder> holds what the build job made: lyren-plan-<version>-win-x64.exe and
-# lyren-plan-<version>-linux-x64, each with its .sha256 file. The script checks both against their
-# .sha256 files, writes SHA256SUMS (both lines, for `sha256sum -c`) and the header of the release
+# <folder> holds what the build job made: lyren-plan-<version>-win-x64.exe,
+# lyren-plan-<version>-linux-x64 and lyren-plan-<version>-node.tar.gz (for Node.js installs, see
+# docs/ubuntu-server.md), each with its .sha256 file. The script checks the three against their
+# .sha256 files, writes SHA256SUMS (three lines, for `sha256sum -c`) and the header of the release
 # notes, and creates the release "Lyren Plan <version>" for <tag> (a prerelease when the version has
-# a "-") with the five files, GitHub's generated notes following the header. It needs gh (GH_TOKEN
+# a "-") with the seven files, GitHub's generated notes following the header. It needs gh (GH_TOKEN
 # with contents: write, GH_REPO=<owner>/<repo>), jq and sha256sum, as on GitHub's Ubuntu runners.
 # --dry-run stops before anything is asked of GitHub and shows the notes in the job summary.
 #
@@ -57,12 +58,14 @@ if [[ -z $repo ]]; then
   repo=OWNER/REPO
 fi
 readme="${GITHUB_SERVER_URL:-https://github.com}/$repo/blob/$tag/README.md"
+guide="${GITHUB_SERVER_URL:-https://github.com}/$repo/blob/$tag/docs/ubuntu-server.md"
 
 cd "$dir"
 win=lyren-plan-$version-win-x64.exe
 linux=lyren-plan-$version-linux-x64
+node=lyren-plan-$version-node.tar.gz
 declare -A sum
-for f in "$win" "$linux"; do
+for f in "$win" "$linux" "$node"; do
   [[ -f $f && -f $f.sha256 ]] || fail "$dir has no $f or no $f.sha256"
   read -r expected named < "$f.sha256" || true
   [[ $named == "$f" || $named == "*$f" ]] || fail "$f.sha256 is not for $f"
@@ -70,26 +73,29 @@ for f in "$win" "$linux"; do
   [[ ${sum[$f]} == "$expected" ]] || fail "SHA-256 mismatch: $f.sha256 says $expected, the file has ${sum[$f]}"
   echo "OK $f ${sum[$f]}"
 done
-printf '%s  %s\n' "${sum[$win]}" "$win" "${sum[$linux]}" "$linux" > SHA256SUMS
-assets=("$win" "$win.sha256" "$linux" "$linux.sha256" SHA256SUMS)
+printf '%s  %s\n' "${sum[$win]}" "$win" "${sum[$linux]}" "$linux" "${sum[$node]}" "$node" > SHA256SUMS
+assets=("$win" "$win.sha256" "$linux" "$linux.sha256" "$node" "$node.sha256" SHA256SUMS)
 
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT
 cat > "$notes" <<EOF
 **Windows:** download \`$win\`. It is the whole app in one program: nothing to install, no Node.js needed. See [Windows app]($readme#windows-app) for starting, stopping and updating.
 
-**Linux (x64):** \`$linux\` is the same single-file app for Linux (\`chmod +x\` it after downloading). To run Lyren Plan with Node.js or Docker instead, see the [README]($readme).
+**Linux server with Node.js:** \`$node\` holds the server and the web app for Node.js 22.13 or newer, such as Ubuntu's own \`nodejs\` package: extract it and run \`node lyren-plan-$version/server.mjs\`, with no npm and no build. [Ubuntu Server]($guide) describes installing it as a systemd service.
+
+**Linux (x64):** \`$linux\` is the same single-file app as on Windows, for Linux (\`chmod +x\` it after downloading). To run Lyren Plan with Docker instead, see the [README]($readme).
 
 | File | SHA-256 |
 |---|---|
 | \`$win\` | \`${sum[$win]}\` |
+| \`$node\` | \`${sum[$node]}\` |
 | \`$linux\` | \`${sum[$linux]}\` |
 
-Check a download before you start it: in PowerShell, \`Get-FileHash .\\$win\` must show the value above. On Linux, download \`$linux.sha256\` next to the binary and run \`sha256sum -c $linux.sha256\`. \`SHA256SUMS\` holds both values: \`sha256sum -c --ignore-missing SHA256SUMS\` checks the files you downloaded.
+Check a download before you use it: in PowerShell, \`Get-FileHash .\\$win\` must show the value above. On Linux, download the file's \`.sha256\` file next to it and run \`sha256sum -c\` on that, e.g. \`sha256sum -c $node.sha256\`. \`SHA256SUMS\` holds all three values: \`sha256sum -c --ignore-missing SHA256SUMS\` checks the files you downloaded.
 
 The Windows exe is **not code-signed**. Microsoft Defender SmartScreen may show "Windows protected your PC": if you trust this download, choose **More info**, then **Run anyway**. Smart App Control (Windows 11) may block it without that choice. See [Getting it]($readme#getting-it).
 
-Built with Node.js $node_version.
+The single-file apps contain Node.js $node_version.
 EOF
 
 if $dry_run; then

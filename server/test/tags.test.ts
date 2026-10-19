@@ -188,8 +188,8 @@ describe('tags API', () => {
   });
 
   it('requires a session and the CSRF header', async () => {
-    const { client, app } = await setup();
-    const anon = await app.request('/api/tags');
+    const { client, app, path } = await setup();
+    const anon = await app.request(path('/api/tags'));
     expect(anon.status).toBe(401);
     const noCsrf = await client.request('POST', '/api/tags', { name: 'x' }, { 'X-Lyren-Request': '' });
     expect(noCsrf.status).toBe(403);

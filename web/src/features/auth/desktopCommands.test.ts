@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DesktopAppDTO } from '@shared/types';
-import { commandShell, desktopCommand, lockoutText, programCommand, ps51ArgText, shellArg, shellName, stopHow, stopStep } from './desktopCommands';
+import { commandShell, desktopCommand, programCommand, ps51ArgText, shellArg, shellName, stopHow, stopStep } from './desktopCommands';
 import { PasswordResetHint } from './PasswordResetHint';
 
 /** The visible text of rendered HTML. */
@@ -25,7 +25,7 @@ const LINUX: DesktopAppDTO = { exe: 'lyren-plan-0.1.0-linux-x64', windows: false
 
 describe('sign-in page: forgot your password', () => {
   it('Node build and Docker (no desktop field): the server command, as before', () => {
-    expect(hint(undefined)).toBe('Forgot your password? On the server run node dist/server.mjs reset-password <username>');
+    expect(hint(undefined)).toBe('Forgot your password? On the server run node dist/server.mjs reset-password <email-or-username>');
   });
 
   it('desktop app on Windows: Command Prompt in the folder of the exe, with its quoted file name', () => {
@@ -34,7 +34,7 @@ describe('sign-in page: forgot your password', () => {
       'On the computer that runs Lyren Plan, open Command Prompt in the folder that holds lyren-plan-0.1.0-win-x64.exe',
     );
     expect(text).toContain('type cmd in that folder’s address bar and press Enter');
-    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password <username>');
+    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password <email-or-username>');
     expect(text).toContain('It prints a new password and signs you out everywhere.');
     expect(text).not.toMatch(/node|dist\/server|docker|on the server/i);
   });
@@ -42,13 +42,13 @@ describe('sign-in page: forgot your password', () => {
   it('desktop app on Linux: a terminal and ./<program>', () => {
     const text = hint(LINUX);
     expect(text).toContain('open a terminal in the folder that holds lyren-plan-0.1.0-linux-x64');
-    expect(text).toContain('./lyren-plan-0.1.0-linux-x64 reset-password <username>');
+    expect(text).toContain('./lyren-plan-0.1.0-linux-x64 reset-password <email-or-username>');
     expect(text).not.toMatch(/Command Prompt|cmd|node|docker/i);
   });
 
   it('a renamed program keeps working in the command', () => {
-    expect(hint({ exe: 'Lyren Plan.exe', windows: true })).toContain('"Lyren Plan.exe" reset-password <username>');
-    expect(hint({ exe: "Dana's Lyren", windows: false })).toContain(`'./Dana'\\''s Lyren' reset-password <username>`);
+    expect(hint({ exe: 'Lyren Plan.exe', windows: true })).toContain('"Lyren Plan.exe" reset-password <email-or-username>');
+    expect(hint({ exe: "Dana's Lyren", windows: false })).toContain(`'./Dana'\\''s Lyren' reset-password <email-or-username>`);
   });
 });
 
@@ -133,7 +133,7 @@ describe('desktop command lines', () => {
     const text = hint({ exe: 'Lyren 100%PATH%.exe', windows: true });
     expect(text).toContain('open PowerShell in the folder that holds Lyren 100%PATH%.exe');
     expect(text).toContain('type powershell in that folder’s address bar and press Enter');
-    expect(text).toContain("& '.\\Lyren 100%PATH%.exe' reset-password <username>");
+    expect(text).toContain("& '.\\Lyren 100%PATH%.exe' reset-password <email-or-username>");
   });
 });
 
@@ -145,10 +145,6 @@ describe('how to stop the desktop app (stopMode)', () => {
       'Quit Lyren Plan: right-click its icon in the notification area (near the clock) and choose Quit Lyren Plan.',
     );
     expect(stopStep({ ...WIN, stopMode: 'terminal' })).toMatch(/^Stop Lyren Plan: press Ctrl\+C in its window, or right-click its icon/);
-    expect(lockoutText(WIN)).toBe(
-      'If you were locked out by too many attempts, wait 15 minutes, or close the Lyren Plan window and start Lyren Plan again.',
-    );
-    expect(lockoutText({ ...WIN, stopMode: 'tray' })).toContain('or quit Lyren Plan and start it again (to quit it, right-click its icon');
     expect(stopHow({ ...WIN, stopMode: 'tray' })).toContain('Windows may put it under the ^ arrow');
     expect(stopHow(LINUX)).toBe('Close the Lyren Plan window, or press Ctrl+C in it.');
   });

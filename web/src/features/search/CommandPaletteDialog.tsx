@@ -14,12 +14,17 @@
 // Picking the page (or drawer task) already showing just closes the palette.
 // Commands that open another overlay (New task, Keyboard shortcuts) run after the palette has
 // fully closed, so focus restoration and history entries don't interleave.
+//
+// The search covers the current space only. "Switch space…" turns the list into the account's spaces
+// (Backspace in the empty input returns); viewers get no "New task" (design §12.9).
 
 import { FloatingFocusManager, FloatingOverlay, FloatingPortal } from '@floating-ui/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import {
   Activity,
+  ArrowLeftRight,
+  Check,
   CornerDownLeft,
   FolderKanban,
   History,
@@ -33,6 +38,7 @@ import {
   SquareKanban,
   Sun,
   Timer,
+  UserRound,
   X,
 } from 'lucide-react';
 import {
@@ -50,10 +56,14 @@ import {
 import { useLocation, useNavigate } from 'react-router';
 import { MILESTONE_STATUS_LABELS, PROJECT_STATUS_LABELS } from '@shared/constants';
 import type { BoardDTO, TaskDTO } from '@shared/types';
+import { useAuthStatus } from '../../api/auth';
 import { useLookups, type Lookups } from '../../api/bootstrap';
 import { useSearch } from '../../api/misc';
 import { findCachedTask } from '../../api/tasks';
+import { ROLE_LABELS } from '../../app/permissions';
+import { rememberLastSpace, useSpace, useSpacePath } from '../../app/space';
 import { EpicDot, ProjectBadge, StatusIcon, statusFraction } from '../../components/domain';
+import { spaceChoices, switchSpacePath } from '../../components/layout/navigation';
 import { useCreateTaskDefaults } from '../../components/layout/useShellActions';
 import { Button, ColorDot, IconButton, Kbd, Shortcut, Spinner } from '../../components/ui';
 import { TRANSITION } from '../../components/ui/internal/floating';
@@ -66,6 +76,7 @@ import { boardUrl, epicUrl, milestoneUrl, projectUrl, TASK_PARAM, taskPageUrl, u
 import { setStoredTheme } from '../../lib/theme';
 import {
   buildSections,
+  buildSpaceSections,
   flattenSections,
   highlightSegments,
   paletteTokens,
@@ -185,6 +196,9 @@ interface PaletteBodyProps {
 }
 
 function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, afterClose, onShowShortcuts }: PaletteBodyProps) {
+  const { id: sid, permissions } = useSpace();
+  const sp = useSpacePath();
+  const spaces = useAuthStatus().data?.spaces;
   const lookups = useLookups();
   const qc = useQueryClient();
   const location = useLocation();
@@ -195,13 +209,15 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
 
   const [query, setQuery] = useState(initialQuery);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  /** 'spaces' after "Switch space…": the list holds the account's spaces. */
+  const [mode, setMode] = useState<'all' | 'spaces'>('all');
   const keyboardNav = useRef(false);
   const today = useToday();
 
   const term = query.trim();
   const tokens = useMemo(() => paletteTokens(term), [term]);
   const debounced = useDebouncedValue(term, DEBOUNCE_MS);
-  const search = useSearch(debounced, SEARCH_LIMIT);
+  const search = useSearch(mode === 'spaces' ? '' : debounced, SEARCH_LIMIT);
   // The visible results belong to the current text (not debouncing, no request in flight).
   const settled = debounced === term && !search.isFetching;
 
@@ -223,10 +239,10 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
    */
   const openTask = useCallback(
     (task: TaskEntry, asPage: boolean, recent = false) => {
-      const cached = recent ? findCachedTask(qc, task.id) : undefined;
+      const cached = recent ? findCachedTask(qc, sid, task.id) : undefined;
       const latest = cached ? taskEntry(cached) : task;
-      rememberRecent({ kind: 'task', ...latest });
-      if (asPage) return go(taskPageUrl(recent ? { id: task.id } : latest));
+      rememberRecent(sid, { kind: 'task', ...latest });
+      if (asPage) return go(taskPageUrl(sid, recent ? { id: task.id } : latest));
       const params = new URLSearchParams(location.search);
       if (params.get(TASK_PARAM) === String(task.id)) return controls.close(); // already open
       const replace = controls.closeForNavigation();
@@ -238,15 +254,15 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
         { replace, preventScrollReset: true, state: { ...(location.state as object | null), taskDrawer: true } },
       );
     },
-    [controls, go, location.pathname, location.search, location.state, navigate, openTaskDrawer, qc, usesHistory],
+    [controls, go, location.pathname, location.search, location.state, navigate, openTaskDrawer, qc, sid, usesHistory],
   );
 
   const openBoard = useCallback(
     (board: BoardDTO) => {
-      rememberRecent({ kind: 'board', id: board.id, name: board.name });
-      go(boardHref(board));
+      rememberRecent(sid, { kind: 'board', id: board.id, name: board.name });
+      go(boardHref(sid, board));
     },
-    [go],
+    [go, sid],
   );
 
   // ---- commands --------------------------------------------------------------------------
@@ -254,25 +270,49 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
   // The page (and drawer task) under the palette; read when "New task" runs.
   const getCreateDefaults = useCreateTaskDefaults();
   const actions = useMemo<PaletteAction[]>(() => {
+    const writer: PaletteAction[] = permissions.write
+      ? [
+          {
+            id: 'new-task',
+            label: 'New task',
+            keywords: 'create add issue todo',
+            icon: <Plus />,
+            shortcut: 'c',
+            run: () => afterClose(() => openCreateTask(getCreateDefaults())),
+          },
+        ]
+      : [];
     return [
+      ...writer,
       {
-        id: 'new-task',
-        label: 'New task',
-        keywords: 'create add issue todo',
-        icon: <Plus />,
-        shortcut: 'c',
-        run: () => afterClose(() => openCreateTask(getCreateDefaults())),
+        id: 'switch-space',
+        label: 'Switch space…',
+        keywords: 'spaces workspace change other open',
+        icon: <ArrowLeftRight />,
+        run: () => {
+          setMode('spaces');
+          setQuery('');
+          setActiveKey(null);
+          inputRef.current?.focus();
+        },
       },
-      { id: 'go-dashboard', label: 'Go to Dashboard', keywords: 'home overview today', icon: <LayoutDashboard />, run: () => go('/dashboard') },
-      { id: 'go-projects', label: 'Go to Projects', icon: <FolderKanban />, run: () => go('/projects') },
-      { id: 'go-boards', label: 'Go to Boards', keywords: 'kanban', icon: <SquareKanban />, run: () => go('/boards') },
-      { id: 'go-activity', label: 'Go to Activity', keywords: 'history feed changes', icon: <Activity />, run: () => go('/activity') },
-      { id: 'go-worklog', label: 'Go to Work log', keywords: 'time tracking hours report', icon: <Timer />, run: () => go('/worklog') },
+      { id: 'go-dashboard', label: 'Go to Dashboard', keywords: 'home overview today', icon: <LayoutDashboard />, run: () => go(sp('/dashboard')) },
+      { id: 'go-projects', label: 'Go to Projects', icon: <FolderKanban />, run: () => go(sp('/projects')) },
+      { id: 'go-boards', label: 'Go to Boards', keywords: 'kanban', icon: <SquareKanban />, run: () => go(sp('/boards')) },
+      { id: 'go-activity', label: 'Go to Activity', keywords: 'history feed changes', icon: <Activity />, run: () => go(sp('/activity')) },
+      { id: 'go-worklog', label: 'Go to Work log', keywords: 'time tracking hours report', icon: <Timer />, run: () => go(sp('/worklog')) },
+      {
+        id: 'go-space-settings',
+        label: 'Go to Space settings',
+        keywords: 'estimate unit default board statuses tags data export backup',
+        icon: <Settings />,
+        run: () => go(sp('/settings')),
+      },
       {
         id: 'go-settings',
-        label: 'Go to Settings',
-        keywords: 'preferences account password statuses tags data export backup',
-        icon: <Settings />,
+        label: 'Go to Account settings',
+        keywords: 'profile preferences password sessions theme week',
+        icon: <UserRound />,
         run: () => go('/settings'),
       },
       {
@@ -294,21 +334,24 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
         run: () => afterClose(onShowShortcuts),
       },
     ];
-  }, [afterClose, controls, dark, getCreateDefaults, go, onShowShortcuts]);
+  }, [afterClose, controls, dark, getCreateDefaults, go, inputRef, onShowShortcuts, permissions.write, sp]);
 
   // ---- results ---------------------------------------------------------------------------
   // Read once per open; tasks refreshed from the server, deleted tasks and boards dropped.
   const recents = useRecentItems();
+  const spaceList = useMemo(() => spaceChoices(spaces ?? [], sid), [spaces, sid]);
   const sections = useMemo(
     () =>
-      buildSections({
-        query: term,
-        actions,
-        recents,
-        boards: lookups.boards,
-        results: debounced ? search.data : undefined,
-      }),
-    [actions, debounced, lookups.boards, recents, search.data, term],
+      mode === 'spaces'
+        ? buildSpaceSections<PaletteAction>(term, spaceList)
+        : buildSections({
+            query: term,
+            actions,
+            recents,
+            boards: lookups.boards,
+            results: debounced ? search.data : undefined,
+          }),
+    [actions, debounced, lookups.boards, mode, recents, search.data, spaceList, term],
   );
   const flat = useMemo(() => flattenSections(sections), [sections]);
   const indexByKey = useMemo(() => new Map(flat.map((item, i) => [item.key, i])), [flat]);
@@ -333,13 +376,17 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
         return board ? openBoard(board) : undefined;
       }
       case 'project':
-        return go(projectUrl(item.project.id));
+        return go(projectUrl(sid, item.project.id));
       case 'milestone':
-        return go(milestoneUrl(item.milestone.projectId, item.milestone.id));
+        return go(milestoneUrl(sid, item.milestone.projectId, item.milestone.id));
       case 'epic':
-        return go(epicUrl(item.epic.projectId, item.epic.id));
+        return go(epicUrl(sid, item.epic.projectId, item.epic.id));
       case 'board':
         return openBoard(item.board);
+      case 'space':
+        if (item.space.current) return controls.close();
+        rememberLastSpace(item.space.id);
+        return go(switchSpacePath(item.space.id));
     }
   };
 
@@ -363,13 +410,17 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
       if (!item) return;
       e.preventDefault();
       activate(item, e.metaKey || e.ctrlKey);
+    } else if (e.key === 'Backspace' && mode === 'spaces' && query === '') {
+      e.preventDefault();
+      setMode('all');
+      setActiveKey(null);
     }
   };
 
   // ---- status ----------------------------------------------------------------------------
-  const searching = tokens.length > 0 && !settled;
-  const failed = tokens.length > 0 && settled && search.isError;
-  const empty = tokens.length > 0 && settled && !search.isError && flat.length === 0;
+  const searching = mode === 'all' && tokens.length > 0 && !settled;
+  const failed = mode === 'all' && tokens.length > 0 && settled && search.isError;
+  const empty = tokens.length > 0 && (mode === 'spaces' || (settled && !search.isError)) && flat.length === 0;
   const announcement =
     tokens.length === 0 ? '' : failed ? 'Search failed' : !settled ? '' : flat.length === 0 ? 'No results' : `${flat.length} results`;
 
@@ -396,8 +447,10 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
             aria-controls={listId}
             aria-activedescendant={activeIndex >= 0 ? optionId(activeIndex) : undefined}
             aria-autocomplete="list"
-            aria-label="Search tasks, projects and commands"
-            placeholder={isMobile ? 'Search or run a command' : 'Search tasks, projects, boards… or type a command'}
+            aria-label={mode === 'spaces' ? 'Switch to a space' : 'Search tasks, projects and commands'}
+            placeholder={
+              mode === 'spaces' ? 'Switch to space…' : isMobile ? 'Search or run a command' : 'Search tasks, projects, boards… or type a command'
+            }
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -504,8 +557,8 @@ function PaletteBody({ initialQuery, inputRef, isMobile, usesHistory, controls, 
         )}
         {empty && (
           <div className="px-3 py-10 text-center">
-            <p className="text-sm font-medium text-fg">No results for “{term}”</p>
-            <p className="mt-1 text-[13px] text-fg-muted">Try fewer words, or a task reference like WEB-12.</p>
+            <p className="text-sm font-medium text-fg">{mode === 'spaces' ? `No space matches “${term}”` : `No results for “${term}”`}</p>
+            {mode === 'all' && <p className="mt-1 text-[13px] text-fg-muted">Try fewer words, or a task reference like WEB-12.</p>}
           </div>
         )}
       </div>
@@ -548,8 +601,8 @@ interface TaskEntry {
 const taskEntry = (task: TaskDTO): TaskEntry => ({ id: task.id, ref: task.ref, title: task.title, archived: task.archivedAt !== null });
 
 /** Global boards have their own page; project boards open in their project's Board tab. */
-function boardHref(board: BoardDTO): string {
-  return board.projectId === null ? boardUrl(board.id) : `${projectUrl(board.projectId)}/board?board=${board.id}`;
+function boardHref(spaceId: string, board: BoardDTO): string {
+  return board.projectId === null ? boardUrl(spaceId, board.id) : `${projectUrl(spaceId, board.projectId)}/board?board=${board.id}`;
 }
 
 function Highlighted({ text, tokens }: { text: string; tokens: readonly string[] }) {
@@ -704,6 +757,21 @@ function OptionContent({ item, tokens, lookups, today, keyHints }: OptionContent
             <Highlighted text={epic.name} tokens={tokens} />
           </span>
           <ProjectBadge project={lookups.projectById.get(epic.projectId)} plain className="shrink-0" />
+        </>
+      );
+    }
+    case 'space': {
+      const { space } = item;
+      return (
+        <>
+          <span aria-hidden className={ICON}>
+            {space.current ? <Check /> : <ArrowLeftRight />}
+          </span>
+          <span className={LABEL}>
+            <Highlighted text={space.name} tokens={tokens} />
+          </span>
+          {space.current && <span className="sr-only">, current space</span>}
+          <span className={META}>{ROLE_LABELS[space.role]}</span>
         </>
       );
     }

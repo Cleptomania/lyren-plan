@@ -4,6 +4,7 @@ import { SearchX } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ProgressStats, ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpaceId, useSpacePath } from '../../app/space';
 import { TaskProgress } from '../../components/domain';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
@@ -49,16 +50,18 @@ export function SidePanel({ children }: { children: ReactNode }) {
 }
 
 export function EntityNotFound({ kind, project }: { kind: 'Milestone' | 'Epic'; project: ProjectDTO }) {
+  const sp = useSpacePath();
+  const sid = useSpaceId();
   return (
     <Page
       width="wide"
       header={
         <PageHeader
           title={`${kind} not found`}
-          backTo={projectUrl(project.id)}
+          backTo={projectUrl(sid, project.id)}
           breadcrumbs={[
-            { label: 'Projects', to: '/projects' },
-            { label: project.name, to: projectUrl(project.id) },
+            { label: 'Projects', to: sp('/projects') },
+            { label: project.name, to: projectUrl(sid, project.id) },
           ]}
         />
       }
@@ -67,7 +70,7 @@ export function EntityNotFound({ kind, project }: { kind: 'Milestone' | 'Epic'; 
         icon={<SearchX />}
         title={`This ${kind.toLowerCase()} doesn’t exist`}
         body="It may have been deleted, or the link is wrong."
-        action={<ButtonLink to={projectUrl(project.id)}>Back to {project.name}</ButtonLink>}
+        action={<ButtonLink to={projectUrl(sid, project.id)}>Back to {project.name}</ButtonLink>}
       />
     </Page>
   );

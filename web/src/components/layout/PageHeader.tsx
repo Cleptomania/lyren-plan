@@ -1,11 +1,14 @@
 // Page title bar (SPEC §9.1): back link, breadcrumbs, title/subtitle, actions, an overflow
-// "⋯" menu and route tabs. Sticky at the top of the document (below the status bar on phones).
+// "⋯" menu and route tabs. Sticky at the top of the document (below the status bar on phones). In a
+// space the viewer may only read, it carries a "View only" badge (design §12.9).
 
 import { clsx } from 'clsx';
-import { ArrowLeft, ChevronRight, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Eye, MoreHorizontal } from 'lucide-react';
 import { Fragment, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { useOptionalSpace } from '../../app/space';
 import { useIsMobile } from '../../lib/hooks';
+import { Badge } from '../ui/Badge';
 import { IconButton, iconButtonClasses } from '../ui/Button';
 import { Menu, type MenuItem } from '../ui/Menu';
 import { RouteTabs, type RouteTab } from '../ui/Tabs';
@@ -54,6 +57,7 @@ export function PageHeader({
 }: PageHeaderProps) {
   const isMobile = useIsMobile();
   const widthClass = usePageWidthClass();
+  const viewOnly = useOptionalSpace()?.permissions.write === false;
   const crumbs = breadcrumbs?.filter((c) => c.label !== undefined && c.label !== null) ?? [];
   const showCrumbs = !isMobile && crumbs.length > 0;
   const upTarget = backTo ?? (isMobile ? [...crumbs].reverse().find((c) => c.to)?.to : undefined);
@@ -97,6 +101,11 @@ export function PageHeader({
             <h1 className="truncate text-base font-semibold leading-6 text-fg md:text-lg">{title}</h1>
             {subtitle && <div className="truncate text-xs text-fg-muted md:text-[13px]">{subtitle}</div>}
           </div>
+          {viewOnly && (
+            <Badge variant="warning" icon={<Eye aria-hidden />} title="Your role in this space lets you read, not change anything">
+              View only
+            </Badge>
+          )}
           {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
           {menu && menu.length > 0 && (
             <Menu trigger={<IconButton aria-label="More actions" icon={<MoreHorizontal />} className="-mr-2" />} items={menu} label="Actions" />

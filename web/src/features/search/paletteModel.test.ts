@@ -8,6 +8,7 @@ import { findCachedTask } from '../../api/tasks';
 import { task as fullTask } from '../../components/domain/fixtures.test-utils';
 import {
   buildSections,
+  buildSpaceSections,
   filterActions,
   filterBoards,
   flattenSections,
@@ -22,6 +23,8 @@ import {
 } from './paletteModel';
 import { recentTasksQuery } from './useRecentItems';
 import { addRecent, applyRecentUpdates, parseRecent, removeRecent, RECENT_MAX, type RecentItem, type RecentTaskUpdate } from './recent';
+
+const SID = '7k2m9q4w8x1c3v5b';
 
 const board = (id: number, name: string, description = ''): BoardDTO =>
   ({ id, name, description, projectId: null, position: id }) as BoardDTO;
@@ -143,6 +146,26 @@ describe('buildSections', () => {
   });
 });
 
+describe('buildSpaceSections ("Switch space…")', () => {
+  const spaces = [
+    { id: 'a1a1a1a1a1a1a1a1', name: 'Team planning', role: 'owner' as const, current: true },
+    { id: 'b2b2b2b2b2b2b2b2', name: 'Home', role: 'viewer' as const, current: false },
+    { id: 'c3c3c3c3c3c3c3c3', name: 'Client work', role: 'member' as const, current: false },
+  ];
+
+  it('lists every space for an empty query, in the switcher’s order', () => {
+    const sections = buildSpaceSections('', spaces);
+    expect(sections.map((s) => s.id)).toEqual(['spaces']);
+    expect(flattenSections(sections).map((i) => i.key)).toEqual(['space:a1a1a1a1a1a1a1a1', 'space:b2b2b2b2b2b2b2b2', 'space:c3c3c3c3c3c3c3c3']);
+  });
+
+  it('keeps the spaces whose name contains every token, and nothing else', () => {
+    expect(flattenSections(buildSpaceSections('pla tea', spaces)).map((i) => (i.kind === 'space' ? i.space.name : ''))).toEqual(['Team planning']);
+    expect(flattenSections(buildSpaceSections('o', spaces)).length).toBe(2);
+    expect(buildSpaceSections('nothing', spaces)).toEqual([]);
+  });
+});
+
 describe('wrapIndex', () => {
   it('wraps in both directions and handles empty lists', () => {
     expect(wrapIndex(0, 1, 3)).toBe(1);
@@ -220,13 +243,13 @@ describe('resolveRecents', () => {
   it('refreshes a moved task from the freshest cached copy (lists included), renames boards and drops deleted ones', () => {
     const qc = new QueryClient();
     // An inactive detail entry from before the move, and a newer list copy after it.
-    qc.setQueryData(qk.task(18), fullTask({ id: 18, ref: 'ME-1', title: 'Renew passport', updatedAt: '2026-10-01T00:00:00.000Z' }));
+    qc.setQueryData(qk.task(SID, 18), fullTask({ id: 18, ref: 'ME-1', title: 'Renew passport', updatedAt: '2026-10-01T00:00:00.000Z' }));
     const list: TaskQueryResult = {
       tasks: [fullTask({ id: 18, ref: 'WEB-19', title: 'Renew passport (moved)', updatedAt: '2026-10-05T00:00:00.000Z' })],
       total: 1,
     } as TaskQueryResult;
-    qc.setQueryData(['tasks', 'query', { any: 1 }], list);
-    const out = resolveRecents(stored, new Map([[1, { name: 'All tasks' }]]), (id) => findCachedTask(qc, id));
+    qc.setQueryData(qk.taskQuery(SID, { limit: 1 }), list);
+    const out = resolveRecents(stored, new Map([[1, { name: 'All tasks' }]]), (id) => findCachedTask(qc, SID, id));
     expect(out).toEqual([
       { kind: 'task', id: 18, ref: 'WEB-19', title: 'Renew passport (moved)', at: 3 },
       { kind: 'board', id: 1, name: 'All tasks', at: 2 },
@@ -241,9 +264,9 @@ describe('resolveRecents', () => {
       { kind: 'task', id: 2, ref: 'WEB-2', title: 'Unarchived since', archived: true, at: 2 },
       { kind: 'task', id: 3, ref: 'WEB-3', title: 'Not cached', archived: true, at: 1 },
     ];
-    qc.setQueryData(qk.task(1), fullTask({ id: 1, ref: 'WEB-1', title: 'Archived since', archivedAt: '2026-10-02T00:00:00.000Z' }));
-    qc.setQueryData(qk.task(2), fullTask({ id: 2, ref: 'WEB-2', title: 'Unarchived since', archivedAt: null }));
-    expect(resolveRecents(recents, new Map(), (id) => findCachedTask(qc, id))).toEqual([
+    qc.setQueryData(qk.task(SID, 1), fullTask({ id: 1, ref: 'WEB-1', title: 'Archived since', archivedAt: '2026-10-02T00:00:00.000Z' }));
+    qc.setQueryData(qk.task(SID, 2), fullTask({ id: 2, ref: 'WEB-2', title: 'Unarchived since', archivedAt: null }));
+    expect(resolveRecents(recents, new Map(), (id) => findCachedTask(qc, SID, id))).toEqual([
       { kind: 'task', id: 1, ref: 'WEB-1', title: 'Archived since', archived: true, at: 3 },
       { kind: 'task', id: 2, ref: 'WEB-2', title: 'Unarchived since', at: 2 },
       { kind: 'task', id: 3, ref: 'WEB-3', title: 'Not cached', archived: true, at: 1 },

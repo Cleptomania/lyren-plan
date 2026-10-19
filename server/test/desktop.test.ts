@@ -63,7 +63,7 @@ describe('parseDesktopArgs', () => {
       env: { DATA_DIR: 'D:\\d' },
     });
     expect(parseDesktopArgs(['reset-password', 'owner'])).toMatchObject({ command: 'reset-password', args: ['owner'] });
-    // --db-path: what Settings → Data appends when DB_PATH moved the database (R6REV-1).
+    // --db-path: what Administration → Overview appends when DB_PATH moved the database (R6REV-1).
     expect(parseDesktopArgs(['reset-password', 'owner', '--db-path', 'E:\\db\\plan.db'])).toMatchObject({
       command: 'reset-password',
       args: ['owner'],
@@ -140,7 +140,7 @@ describe('desktop defaults', () => {
     expect(win).toContain('Data folder   C:\\Users\\ann\\AppData\\Local\\Lyren Plan');
     expect(win).toContain(`http://127.0.0.1:${DESKTOP_PORT}/`);
     expect(win).toMatch(/--lan[\s\S]*firewall/);
-    expect(win).toContain('echo new-password| lyren-plan.exe reset-password owner');
+    expect(win).toContain('echo new-password| lyren-plan.exe reset-password you@example.com');
     expect(win).toContain('chcp 65001');
     expect(win).toMatch(/--db-path <file> +Use this database file instead of lyren\.db in the data\s+folder\.\s+\[DB_PATH\]/);
     const linux = desktopHelp('lyren-plan', '/home/ann/.local/share/lyren-plan', 'linux');
@@ -155,6 +155,23 @@ describe('desktop defaults', () => {
     expect(linux).not.toMatch(/--console|notification area/);
   });
 
+  it('help names every maintenance command and what the data folder holds (§9.7)', () => {
+    const win = desktopHelp('lyren-plan.exe', 'C:\\Users\\ann\\AppData\\Local\\Lyren Plan', 'win32');
+    for (const command of ['backup <file>', 'restore <file>', 'reset-password <email-or-username>', 'promote-admin <email-or-username>',
+      'policy [open|invite_only|closed]', 'spaces', 'stop', 'help']) {
+      expect(win).toContain(`  lyren-plan.exe ${command}\n`);
+    }
+    expect(win).toContain('It holds lyren.db (the accounts), spaces\\ (one database per space)\n                and backups\\ (automatic snapshots).');
+    expect(win).toContain('lyren-<date>.tar');
+    expect(win).toContain('It takes effect when Lyren Plan starts the next time: quit Lyren Plan and\n      start it again then.');
+    expect(win).toContain('backups\\before-restore-<time> next to the database (in the data folder).');
+    expect(win).toContain("(the account's email address, or the username of an\n      account from before email addresses)");
+    const linux = desktopHelp('lyren-plan', '/home/ann/.local/share/lyren-plan', 'linux');
+    expect(linux).toContain('  ./lyren-plan restore <file>\n');
+    expect(linux).toContain('It holds lyren.db (the accounts), spaces/ (one database per space)\n                and backups/ (automatic snapshots).');
+    expect(linux).toContain('backups/before-restore-<time> next to the database (in the data folder).');
+  });
+
   it('help quotes a program name Command Prompt would split (a renamed copy)', () => {
     expect(commandName('lyren-plan-0.1.0-win-x64.exe', 'win32')).toBe('lyren-plan-0.1.0-win-x64.exe');
     expect(commandName('Lyren Plan.exe', 'win32')).toBe('"Lyren Plan.exe"');
@@ -162,7 +179,7 @@ describe('desktop defaults', () => {
     expect(commandName('lyren-plan', 'linux')).toBe('./lyren-plan');
     expect(commandName('lyren plan', 'linux')).toBe("'./lyren plan'");
     const win = desktopHelp('Lyren Plan.exe', 'C:\\x', 'win32');
-    expect(win).toContain('echo new-password| "Lyren Plan.exe" reset-password owner');
+    expect(win).toContain('echo new-password| "Lyren Plan.exe" reset-password you@example.com');
     expect(win).toContain('"Lyren Plan.exe" backup <file>');
     expect(win).toContain('Double-click Lyren Plan.exe to start Lyren Plan.');
     // A % in the name: Command Prompt would expand it even in quotes, so the commands are for PowerShell (RCK-1).
@@ -171,14 +188,14 @@ describe('desktop defaults', () => {
     expect(pct).toContain('Usage (in PowerShell: Command Prompt would change the % in the name of the program):');
     expect(pct).toContain("or run in PowerShell: & '.\\Lyren 100%PATH%.exe' stop");
     expect(pct).toContain("& '.\\Lyren 100%PATH%.exe' backup <file>");
-    expect(pct).toContain("'new-password' | & '.\\Lyren 100%PATH%.exe' reset-password owner");
+    expect(pct).toContain("'new-password' | & '.\\Lyren 100%PATH%.exe' reset-password you@example.com");
     expect(pct).not.toContain('echo new-password|');
   });
 
   it('help: a command without a window shows its result in a box and ends; from Task Scheduler or a service it only logs (RCK-2, FV-3)', () => {
     const win = desktopHelp('lyren-plan.exe', 'C:\\x', 'win32');
     expect(win).toContain(
-      'Started without a window, for example from a shortcut, backup,\nreset-password and stop show their result in a message box and end at once (help:\nin a console window). Started by Task Scheduler or a Windows service they show\nnothing: their output goes to that log file, and the exit code says whether they\nsucceeded.',
+      'Started without a window, for example from a shortcut, the\ncommands below (backup, restore, reset-password, stop, ...) show their result in a\nmessage box and end at once (help: in a console window). Started by Task Scheduler\nor a Windows service they show nothing: their output goes to that log file, and the\nexit code says whether they succeeded.',
     );
     // The log file of a database not named lyren.db (FV-2).
     expect(win).toContain('(with --db-path: in a logs folder next to the\ndatabase, as <name>.log for a database not named lyren.db)');
@@ -905,7 +922,7 @@ describe('desktop app from source (tsx server/src/sea.ts)', () => {
       const setup = await fetch(`http://127.0.0.1:${port}/api/auth/setup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Lyren-Request': '1' },
-        body: JSON.stringify({ username: 'owner', password: 'correct horse battery', displayName: 'Owner', setupCode: 'tok-open-1' }),
+        body: JSON.stringify({ email: 'owner@example.com', password: 'correct horse battery', displayName: 'Owner', setupCode: 'tok-open-1' }),
       });
       expect(setup.status).toBe(201);
       // After the account was created in the running copy: the app, not a stale setup link.

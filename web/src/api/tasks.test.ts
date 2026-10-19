@@ -6,6 +6,10 @@ import { epic, project, status, task } from '../components/domain/fixtures.test-
 import { qk } from './keys';
 import { applyTaskPatch, findCachedTask, findCachedTaskByKey, forgetDeletedTasks, inverseTaskPatch, updateTaskOptions, type TaskUpdateVariables } from './tasks';
 
+/** The space of the tests' caches (a second one, OTHER, for what must stay apart). */
+const SID = '7k2m9q4w8x1c3v5b';
+const OTHER = '0123456789abcdef';
+
 // After a delete, the deleted task's own queries must not be refetched (that is a 404 while the
 // drawer / task page is still closing); everything else under ['tasks'] must be.
 describe('forgetDeletedTasks', () => {
@@ -33,30 +37,30 @@ describe('forgetDeletedTasks', () => {
   it('keeps observed queries of the deleted task without refetching, drops unobserved ones', async () => {
     const { qc, calls, observe } = setup();
     const unsubs = [
-      observe(qk.task(5), { id: 5 }), // the open drawer
-      observe(qk.timeline(5), { comments: [] }), // its timeline
-      observe(qk.task(6), { id: 6 }), // another open task
-      observe(qk.taskQuery({}), { tasks: [], total: 0 }), // an open list
+      observe(qk.task(SID, 5), { id: 5 }), // the open drawer
+      observe(qk.timeline(SID, 5), { comments: [] }), // its timeline
+      observe(qk.task(SID, 6), { id: 6 }), // another open task
+      observe(qk.taskQuery(SID, {}), { tasks: [], total: 0 }), // an open list
     ];
-    qc.setQueryData(qk.taskByRef('WEB-5'), { id: 5 }); // unobserved caches of the deleted task
-    qc.setQueryData(qk.task(7), { id: 7 });
+    qc.setQueryData(qk.taskByRef(SID, 'WEB-5'), { id: 5 }); // unobserved caches of the deleted task
+    qc.setQueryData(qk.task(SID, 7), { id: 7 });
 
-    await forgetDeletedTasks(qc, [5]);
+    await forgetDeletedTasks(qc, SID, [5]);
 
-    expect(calls.sort()).toEqual([JSON.stringify(qk.task(6)), JSON.stringify(qk.taskQuery({}))].sort());
-    expect(qc.getQueryData(qk.task(5))).toEqual({ id: 5 });
-    expect(qc.getQueryData(qk.taskByRef('WEB-5'))).toBeUndefined();
-    expect(qc.getQueryState(qk.task(7))?.isInvalidated).toBe(true);
+    expect(calls.sort()).toEqual([JSON.stringify(qk.task(SID, 6)), JSON.stringify(qk.taskQuery(SID, {}))].sort());
+    expect(qc.getQueryData(qk.task(SID, 5))).toEqual({ id: 5 });
+    expect(qc.getQueryData(qk.taskByRef(SID, 'WEB-5'))).toBeUndefined();
+    expect(qc.getQueryState(qk.task(SID, 7))?.isInvalidated).toBe(true);
     unsubs.forEach((u) => u());
   });
 
   it('handles several ids (bulk delete)', async () => {
     const { qc, calls, observe } = setup();
-    const unsubs = [observe(qk.task(1), { id: 1 }), observe(qk.task(2), { id: 2 }), observe(qk.task(3), { id: 3 })];
-    qc.setQueryData(qk.timeline(2), { comments: [] });
-    await forgetDeletedTasks(qc, [1, 2]);
-    expect(calls).toEqual([JSON.stringify(qk.task(3))]);
-    expect(qc.getQueryData(qk.timeline(2))).toBeUndefined();
+    const unsubs = [observe(qk.task(SID, 1), { id: 1 }), observe(qk.task(SID, 2), { id: 2 }), observe(qk.task(SID, 3), { id: 3 })];
+    qc.setQueryData(qk.timeline(SID, 2), { comments: [] });
+    await forgetDeletedTasks(qc, SID, [1, 2]);
+    expect(calls).toEqual([JSON.stringify(qk.task(SID, 3))]);
+    expect(qc.getQueryData(qk.timeline(SID, 2))).toBeUndefined();
     unsubs.forEach((u) => u());
   });
 });
@@ -70,12 +74,12 @@ interface Deferred {
 
 function updateHarness(initial: TaskDTO[]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
-  const listKey = qk.taskQuery({});
+  const listKey = qk.taskQuery(SID, {});
   qc.setQueryData<TaskQueryResult>(listKey, { tasks: initial, total: initial.length });
   /** PATCH requests in the order they were sent; settle them from the test. */
   const patches: Array<{ id: number; body: unknown } & Deferred> = [];
   vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
-    const m = /^\/api\/tasks\/(\d+)$/.exec(url);
+    const m = new RegExp(`^/api/s/${SID}/tasks/(\\d+)$`).exec(url);
     if (!m || init.method !== 'PATCH') return Promise.reject(new TypeError('unexpected ' + url));
     return new Promise<Response>((resolve, reject) => {
       patches.push({
@@ -88,7 +92,7 @@ function updateHarness(initial: TaskDTO[]) {
     });
   });
   const update = (vars: TaskUpdateVariables) => {
-    const observer = new MutationObserver(qc, updateTaskOptions(qc));
+    const observer = new MutationObserver(qc, updateTaskOptions(qc, SID));
     const done = observer.mutate(vars).then(
       () => 'ok' as const,
       () => 'error' as const,
@@ -186,20 +190,64 @@ describe('updateTaskOptions', () => {
 
   it('starts from the freshest cached copy, not a stale inactive detail entry', async () => {
     const { qc, sent, update, shown, flush } = updateHarness([task({ id: 9, title: 'Renamed elsewhere', updatedAt: '2026-10-05T00:00:00.000Z' })]);
-    qc.setQueryData(qk.task(9), task({ id: 9, title: 'Old title', updatedAt: '2026-10-01T00:00:00.000Z' }));
-    expect(findCachedTask(qc, 9)?.title).toBe('Renamed elsewhere');
+    qc.setQueryData(qk.task(SID, 9), task({ id: 9, title: 'Old title', updatedAt: '2026-10-01T00:00:00.000Z' }));
+    expect(findCachedTask(qc, SID, 9)?.title).toBe('Renamed elsewhere');
     const done = update({ id: 9, priority: 2 });
     await flush();
     expect(shown(9)).toMatchObject({ title: 'Renamed elsewhere', priority: 2 });
-    expect(qc.getQueryData<TaskDTO>(qk.task(9))?.title).toBe('Renamed elsewhere');
+    expect(qc.getQueryData<TaskDTO>(qk.task(SID, 9))?.title).toBe('Renamed elsewhere');
     sent(0).resolve(task({ id: 9, title: 'Renamed elsewhere', priority: 2, updatedAt: '2026-10-06T00:00:00.000Z' }));
     expect(await done).toBe('ok');
   });
 
   it('prefers the detail entry when it is the fresher copy', () => {
     const { qc } = updateHarness([task({ id: 9, title: 'List copy', updatedAt: '2026-10-01T00:00:00.000Z' })]);
-    qc.setQueryData(qk.task(9), task({ id: 9, title: 'Detail copy', updatedAt: '2026-10-03T00:00:00.000Z' }));
-    expect(findCachedTask(qc, 9)?.title).toBe('Detail copy');
+    qc.setQueryData(qk.task(SID, 9), task({ id: 9, title: 'Detail copy', updatedAt: '2026-10-03T00:00:00.000Z' }));
+    expect(findCachedTask(qc, SID, 9)?.title).toBe('Detail copy');
+  });
+});
+
+describe('an edit that settles after the page moved to another space', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('touches only the caches of the space it was made in, where the same ids mean other tasks', async () => {
+    const { qc, listKey, sent, update, shown, flush } = updateHarness([task({ id: 9, priority: 1 })]);
+    const otherList = qk.taskQuery(OTHER, {});
+    qc.setQueryData<TaskQueryResult>(otherList, { tasks: [task({ id: 9, priority: 1, title: 'Another space' })], total: 1 });
+    qc.setQueryData(qk.task(OTHER, 9), task({ id: 9, priority: 1, title: 'Another space' }));
+    qc.setQueryData(qk.bootstrap(OTHER), { tasks: [] });
+    const done = update({ id: 9, priority: 4 });
+    await flush();
+    // The user opens the other space meanwhile; the answer then arrives.
+    sent(0).resolve(task({ id: 9, priority: 4, ref: 'NEW-9', updatedAt: '2026-10-02T00:00:00.000Z' }));
+    expect(await done).toBe('ok');
+    expect(shown(9)).toMatchObject({ priority: 4, ref: 'NEW-9' });
+    expect(qc.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(qc.getQueryData<TaskQueryResult>(otherList)?.tasks[0]).toMatchObject({ priority: 1, title: 'Another space' });
+    expect(qc.getQueryData<TaskDTO>(qk.task(OTHER, 9))).toMatchObject({ priority: 1, title: 'Another space' });
+    for (const key of [otherList, qk.task(OTHER, 9), qk.bootstrap(OTHER)]) expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
+  });
+
+  it('a failure rolls back in its own space only', async () => {
+    const { qc, sent, update, shown, flush } = updateHarness([task({ id: 9, priority: 1 })]);
+    const otherList = qk.taskQuery(OTHER, {});
+    qc.setQueryData<TaskQueryResult>(otherList, { tasks: [task({ id: 9, priority: 3 })], total: 1 });
+    const done = update({ id: 9, priority: 4 });
+    await flush();
+    sent(0).fail(500);
+    expect(await done).toBe('error');
+    expect(shown(9)?.priority).toBe(1);
+    expect(qc.getQueryData<TaskQueryResult>(otherList)?.tasks[0]?.priority).toBe(3);
+  });
+
+  it('a delete forgets the task in its own space only', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(qk.task(SID, 5), { id: 5 });
+    qc.setQueryData(qk.task(OTHER, 5), { id: 5 });
+    await forgetDeletedTasks(qc, SID, [5]);
+    expect(qc.getQueryData(qk.task(SID, 5))).toBeUndefined();
+    expect(qc.getQueryData(qk.task(OTHER, 5))).toEqual({ id: 5 });
+    expect(qc.getQueryState(qk.task(OTHER, 5))?.isInvalidated).toBe(false);
   });
 });
 
@@ -209,26 +257,26 @@ describe('findCachedTaskByKey', () => {
 
   it('finds a task by id like findCachedTask', () => {
     const qc = new QueryClient();
-    qc.setQueryData(qk.task(3), task({ id: 3, ref: 'WEB-3', epicId: 7 }));
-    expect(findCachedTaskByKey(qc, { id: 3 })?.epicId).toBe(7);
-    expect(findCachedTaskByKey(qc, { id: 4 })).toBeUndefined();
+    qc.setQueryData(qk.task(SID, 3), task({ id: 3, ref: 'WEB-3', epicId: 7 }));
+    expect(findCachedTaskByKey(qc, SID, { id: 3 })?.epicId).toBe(7);
+    expect(findCachedTaskByKey(qc, SID, { id: 4 })).toBeUndefined();
   });
 
   it('resolves a ref to the freshest copy of that task, not the stale by-ref entry', () => {
     const qc = new QueryClient();
     // A task page: the by-ref entry from the first load, and the detail entry edits update.
-    qc.setQueryData(qk.taskByRef('WEB-3'), task({ id: 3, ref: 'WEB-3', epicId: null, updatedAt: OLD }));
-    qc.setQueryData(qk.task(3), task({ id: 3, ref: 'WEB-3', epicId: 7, updatedAt: NEW }));
-    expect(findCachedTaskByKey(qc, { ref: 'web-3' })).toMatchObject({ id: 3, epicId: 7 });
+    qc.setQueryData(qk.taskByRef(SID, 'WEB-3'), task({ id: 3, ref: 'WEB-3', epicId: null, updatedAt: OLD }));
+    qc.setQueryData(qk.task(SID, 3), task({ id: 3, ref: 'WEB-3', epicId: 7, updatedAt: NEW }));
+    expect(findCachedTaskByKey(qc, SID, { ref: 'web-3' })).toMatchObject({ id: 3, epicId: 7 });
   });
 
   it('finds a ref in detail entries and lists when there is no by-ref entry', () => {
     const qc = new QueryClient();
-    qc.setQueryData(qk.task(5), task({ id: 5, ref: 'ME-2', title: 'Detail' }));
-    expect(findCachedTaskByKey(qc, { ref: 'ME-2' })?.title).toBe('Detail');
-    qc.setQueryData<TaskQueryResult>(qk.taskQuery({ limit: 5 }), { tasks: [task({ id: 6, ref: 'ME-3', title: 'Listed' })], total: 1 });
-    expect(findCachedTaskByKey(qc, { ref: 'ME-3' })?.title).toBe('Listed');
-    expect(findCachedTaskByKey(qc, { ref: 'ME-4' })).toBeUndefined();
+    qc.setQueryData(qk.task(SID, 5), task({ id: 5, ref: 'ME-2', title: 'Detail' }));
+    expect(findCachedTaskByKey(qc, SID, { ref: 'ME-2' })?.title).toBe('Detail');
+    qc.setQueryData<TaskQueryResult>(qk.taskQuery(SID, { limit: 5 }), { tasks: [task({ id: 6, ref: 'ME-3', title: 'Listed' })], total: 1 });
+    expect(findCachedTaskByKey(qc, SID, { ref: 'ME-3' })?.title).toBe('Listed');
+    expect(findCachedTaskByKey(qc, SID, { ref: 'ME-4' })).toBeUndefined();
   });
 });
 

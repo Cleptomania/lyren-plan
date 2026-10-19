@@ -9,7 +9,8 @@ import { useEffect } from 'react';
 import { matchPath, useLocation } from 'react-router';
 import { useLookups } from '../../api/bootstrap';
 import { findCachedTaskByKey } from '../../api/tasks';
-import { taskKeyForLocation } from '../../components/layout/navigation';
+import { useSpaceId } from '../../app/space';
+import { IN_SPACE, taskKeyForLocation } from '../../components/layout/navigation';
 import { rememberRecent, type RecentInput } from './recent';
 
 function positiveInt(value: string | null | undefined): number | null {
@@ -19,13 +20,14 @@ function positiveInt(value: string | null | undefined): number | null {
 
 /** Board shown by the URL: a global board page, or a project's Board tab with `?board=<id>`. */
 function boardIdFor(pathname: string, search: string): number | null {
-  const global = matchPath('/boards/:boardId', pathname);
+  const global = matchPath(`${IN_SPACE}/boards/:boardId`, pathname);
   if (global) return positiveInt(global.params.boardId);
-  if (matchPath('/projects/:projectId/board', pathname)) return positiveInt(new URLSearchParams(search).get('board'));
+  if (matchPath(`${IN_SPACE}/projects/:projectId/board`, pathname)) return positiveInt(new URLSearchParams(search).get('board'));
   return null;
 }
 
 export function useRecentTracking(): void {
+  const sid = useSpaceId();
   const { pathname, search } = useLocation();
   const qc = useQueryClient();
   const { boardById } = useLookups();
@@ -36,13 +38,13 @@ export function useRecentTracking(): void {
     if (taskKey === null) return;
     let last = '';
     const record = () => {
-      const task = findCachedTaskByKey(qc, taskKey);
+      const task = findCachedTaskByKey(qc, sid, taskKey);
       if (!task) return;
       const entry: RecentInput = { kind: 'task', id: task.id, ref: task.ref, title: task.title, archived: task.archivedAt !== null };
       const signature = JSON.stringify(entry);
       if (signature === last) return;
       last = signature;
-      rememberRecent(entry);
+      rememberRecent(sid, entry);
     };
     record();
     // Cache writes (fetches and optimistic edits) may load or change the task while it is open.
@@ -50,12 +52,12 @@ export function useRecentTracking(): void {
       if (event.type === 'updated' && event.action.type === 'success') record();
     });
     // taskKeyId stands in for taskKey (a new object every render).
-  }, [qc, taskKeyId]);
+  }, [qc, sid, taskKeyId]);
 
   const boardId = boardIdFor(pathname, search);
   const board = boardId === null ? undefined : boardById.get(boardId);
   const boardName = board?.name;
   useEffect(() => {
-    if (boardId !== null && boardName !== undefined) rememberRecent({ kind: 'board', id: boardId, name: boardName });
-  }, [boardId, boardName]);
+    if (boardId !== null && boardName !== undefined) rememberRecent(sid, { kind: 'board', id: boardId, name: boardName });
+  }, [sid, boardId, boardName]);
 }

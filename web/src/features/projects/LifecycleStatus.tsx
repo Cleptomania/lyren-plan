@@ -25,6 +25,7 @@ import {
   type MilestoneStatus,
   type ProjectStatus,
 } from '@shared/constants';
+import { useSpace } from '../../app/space';
 import { Badge, Picker, type BadgeVariant, type PickerOption } from '../../components/ui';
 
 interface StatusMeta {
@@ -121,7 +122,10 @@ export interface LifecyclePickerProps<K extends LifecycleKind> {
   className?: string;
 }
 
-/** Inline status changer: a badge-styled button opening the status list (sheet on phones). */
+/**
+ * Inline status changer: a badge-styled button opening the status list (sheet on phones). For a role
+ * that may not change it (design §12.9) the plain badge.
+ */
 export function LifecyclePicker<K extends LifecycleKind>({
   kind,
   value,
@@ -131,6 +135,7 @@ export function LifecyclePicker<K extends LifecycleKind>({
   disabled,
   className,
 }: LifecyclePickerProps<K>) {
+  const { write } = useSpace().permissions;
   const current = lifecycleMeta(kind, value);
   const CurrentIcon = current.icon;
   const options: PickerOption<string>[] = lifecycleStatuses(kind).map((status) => {
@@ -139,6 +144,7 @@ export function LifecyclePicker<K extends LifecycleKind>({
     return { value: status, label: m.label, icon: <Icon aria-hidden className={clsx('size-4', m.tone)} /> };
   });
   const label = `${KIND_LABEL[kind]} status`;
+  if (!write) return <LifecycleBadge kind={kind} status={value} size={size} className={className} />;
   return (
     <Picker<string>
       label={label}

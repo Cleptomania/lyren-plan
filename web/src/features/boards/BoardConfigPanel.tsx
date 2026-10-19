@@ -1,13 +1,15 @@
 // Board configuration drawer (full-screen on phones). Every change applies to the board
-// immediately and saved boards autosave (useBoardConfig debounces ~400 ms) — no Save button.
+// immediately and saved boards autosave (useBoardConfig debounces ~400 ms) — no Save button. A viewer
+// (design §12.9) can try settings out in this view; nothing is saved, and the name is not editable.
 
-import { Check, Kanban, List } from 'lucide-react';
+import { Check, Eye, Kanban, List } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { CARD_COLOR_BY, CARD_FIELD_LABELS, CARD_FIELDS, type BoardConfig, type CardColorBy } from '@shared/board';
 import { LIMITS } from '@shared/constants';
 import { TASK_SORT_FIELDS, type TaskSortField } from '@shared/schemas';
 import type { BoardDTO } from '@shared/types';
 import { useUpdateBoard } from '../../api/boards';
+import { useSpace } from '../../app/space';
 import { Checkbox, Drawer, Field, Input, SegmentedControl, Select, Tabs, Textarea, toast } from '../../components/ui';
 import type { ConfigSection } from './boardUi';
 import { FilterEditor } from './FilterEditor';
@@ -129,10 +131,11 @@ function BoardDetails({ board }: { board: BoardDTO }) {
 
 function LayoutSection({ config, setConfig, board, forcedList }: Pick<BoardConfigPanelProps, 'config' | 'setConfig' | 'board' | 'forcedList'>) {
   const uid = useId();
+  const { write } = useSpace().permissions;
   const manual = config.sort.field === 'manual';
   return (
     <div className="flex flex-col gap-6">
-      {board && <BoardDetails board={board} />}
+      {board && write && <BoardDetails board={board} />}
       <Field label="Layout" hint={forcedList ? 'This device shows boards as a list (toggle it in the filter bar).' : undefined}>
         <SegmentedControl<BoardConfig['layout']>
           aria-label="Layout"
@@ -166,11 +169,13 @@ function LayoutSection({ config, setConfig, board, forcedList }: Pick<BoardConfi
             { value: 'desc', label: manual ? 'Reversed' : 'Descending' },
           ]}
         />
-        <p className="text-xs text-fg-muted">
-          {manual
-            ? 'Drag cards to put them in order. The order is shared by every board and list.'
-            : 'Dragging moves cards between groups; their order follows the sort.'}
-        </p>
+        {write && (
+          <p className="text-xs text-fg-muted">
+            {manual
+              ? 'Drag cards to put them in order. The order is shared by every board and list.'
+              : 'Dragging moves cards between groups; their order follows the sort.'}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -227,6 +232,7 @@ export function BoardConfigPanel(props: BoardConfigPanelProps) {
   const uid = useId();
   const tabsId = `cfg${uid.replace(/:/g, '')}`;
   const listLayout = config.layout === 'list' || forcedList;
+  const saved = useSpace().permissions.write;
   return (
     <Drawer
       open={open}
@@ -238,8 +244,8 @@ export function BoardConfigPanel(props: BoardConfigPanelProps) {
         <span className="flex min-w-0 items-center gap-2">
           <span className="shrink-0">Configure board</span>
           <span className="flex min-w-0 items-center gap-1 text-xs font-normal text-fg-subtle">
-            <Check aria-hidden className="size-3.5 shrink-0" />
-            <span className="min-w-0 truncate">Saved automatically</span>
+            {saved ? <Check aria-hidden className="size-3.5 shrink-0" /> : <Eye aria-hidden className="size-3.5 shrink-0" />}
+            <span className="min-w-0 truncate">{saved ? 'Saved automatically' : 'View only: changes are not saved'}</span>
           </span>
         </span>
       }

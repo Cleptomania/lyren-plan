@@ -7,6 +7,7 @@ import { forwardRef, useLayoutEffect, useRef, useState, type ButtonHTMLAttribute
 import { Link } from 'react-router';
 import type { ActivityDTO, MilestoneDTO, ProjectDTO, TaskDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpaceId, useSpacePath } from '../../app/space';
 import { DueDateLabel, TaskRow, type CardFields, type RowHideKey } from '../../components/domain';
 import { Badge, ButtonLink, Card, ColorDot, ProgressBar, Skeleton, SkeletonList, Spinner } from '../../components/ui';
 import { percent } from '../../lib/format';
@@ -308,6 +309,7 @@ export function TaskSectionSkeleton({ rows = 3 }: { rows?: number }) {
 const PROJECT_ROWS = 6;
 
 export function ProjectsCard({ today }: { today: string }) {
+  const sp = useSpacePath();
   const { projects, milestonesByProject } = useLookups();
   const active = dashboardProjects(projects);
   const shown = active.slice(0, PROJECT_ROWS);
@@ -320,14 +322,14 @@ export function ProjectsCard({ today }: { today: string }) {
           icon={<FolderKanban />}
           tone="neutral"
           action={
-            <ButtonLink to="/projects" variant="ghost" size="sm">
+            <ButtonLink to={sp('/projects')} variant="ghost" size="sm">
               {active.length > PROJECT_ROWS ? `All ${active.length}` : 'All projects'}
             </ButtonLink>
           }
         />
         {active.length === 0 ? (
           <SectionEmpty icon={<FolderKanban />}>
-            No active projects. <Link to="/projects" className="font-medium text-accent hover:underline">Start one</Link> to see its
+            No active projects. <Link to={sp('/projects')} className="font-medium text-accent hover:underline">Start one</Link> to see its
             progress here.
           </SectionEmpty>
         ) : (
@@ -343,12 +345,13 @@ export function ProjectsCard({ today }: { today: string }) {
 }
 
 function ProjectRow({ project, milestone, today }: { project: ProjectDTO; milestone: MilestoneDTO | null; today: string }) {
+  const sid = useSpaceId();
   const { tasksTotal, tasksClosed, tasksOpen, tasksOverdue } = project.stats;
   const pct = percent(tasksClosed, tasksTotal);
   return (
     <li>
       <Link
-        to={projectUrl(project.id)}
+        to={projectUrl(sid, project.id)}
         className="flex flex-col gap-2 px-4 py-3 transition-colors hover:bg-surface-2 focus-visible:-outline-offset-2 active:bg-surface-2"
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -385,6 +388,7 @@ function ProjectRow({ project, milestone, today }: { project: ProjectDTO; milest
 const PREVIEW_ACTIVITY = 6;
 
 export function ActivityCard({ items }: { items: ActivityDTO[] }) {
+  const sp = useSpacePath();
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? items : items.slice(0, PREVIEW_ACTIVITY);
   const more = items.length - PREVIEW_ACTIVITY;
@@ -397,7 +401,7 @@ export function ActivityCard({ items }: { items: ActivityDTO[] }) {
           icon={<Activity />}
           tone="neutral"
           action={
-            <ButtonLink to="/activity" variant="ghost" size="sm">
+            <ButtonLink to={sp('/activity')} variant="ghost" size="sm">
               View all
             </ButtonLink>
           }

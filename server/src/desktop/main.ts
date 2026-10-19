@@ -1,15 +1,16 @@
 // Command line of the single-file desktop app (lyren-plan.exe): the same commands as the Node
-// build plus `stop`, with desktop defaults (defaults.ts) and options (args.ts). Started without
-// arguments, i.e. double-clicked, it runs `serve`, which on Windows shows itself as an icon in the
-// notification area instead of a console window (mode.ts).
+// build (serve, backup, restore, reset-password, promote-admin, policy, spaces, help) plus `stop`, with
+// desktop defaults (defaults.ts) and options (args.ts). Started without arguments, i.e. double-clicked,
+// it runs `serve`, which on Windows shows itself as an icon in the notification area instead of a
+// console window (mode.ts).
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { APP_VERSION, loadConfig, type ConfigDefaults } from '../config';
-import { backup, CliExit, exitWith, loadConfigOrExit, resetPassword, type MaintenanceContext } from '../cli';
+import { backup, CliExit, exitWith, loadConfigOrExit, policy, promoteAdmin, resetPassword, restore, spaces, type MaintenanceContext } from '../cli';
 import type { StaticSource } from '../http/static';
-import { separateDbPath } from '../routes/desktop';
+import { separateDbPath } from '../runtime/node/desktop';
 import { parseDesktopArgs } from './args';
 import { commandLine, commandName, commandShell, howToRun, waitForEnter } from './console';
 import { DESKTOP_PORT, DESKTOP_PORT_SPAN, desktopDefaults } from './defaults';
@@ -25,22 +26,24 @@ export { commandName } from './console';
 
 export function desktopHelp(exe: string, dataDir: string, platform: NodeJS.Platform = process.platform): string {
   const win = platform === 'win32';
+  const spacesFolder = win ? 'spaces\\' : 'spaces/';
+  const backupsFolder = win ? 'backups\\' : 'backups/';
   // Command Prompt would change a % in the program's name (commandShell): then PowerShell commands.
   const shell = commandShell([exe], platform);
   const run = commandName(exe, platform, shell);
   const pipe =
     shell === 'powershell'
       ? `stdin when piped, e.g. in PowerShell:
-        'new-password' | ${run} reset-password owner
+        'new-password' | ${run} reset-password you@example.com
       (Windows PowerShell 5.1 turns letters outside ASCII into ?; PowerShell 7
       keeps them); otherwise generates and prints a random one.`
       : win
         ? `stdin when piped, e.g. in Command Prompt:
-        echo new-password| ${run} reset-password owner
+        echo new-password| ${run} reset-password you@example.com
       (first run chcp 65001 if it has letters outside ASCII); otherwise generates
       and prints a random one.`
         : `stdin when piped:
-        echo 'new password' | ${run} reset-password owner
+        echo 'new password' | ${run} reset-password you@example.com
       otherwise generates and prints a random one.`;
   const firewall = win
     ? `
@@ -59,11 +62,11 @@ logs\\lyren-plan.log in the data folder (with --db-path: in a logs folder next t
 database, as <name>.log for a database not named lyren.db). If Lyren Plan is already
 running, starting it again just opens the browser. Your data is not stored next to
 the program, so you can move, rename or replace (update) the program file without
-losing anything. Started without a window, for example from a shortcut, backup,
-reset-password and stop show their result in a message box and end at once (help:
-in a console window). Started by Task Scheduler or a Windows service they show
-nothing: their output goes to that log file, and the exit code says whether they
-succeeded.`
+losing anything. Started without a window, for example from a shortcut, the
+commands below (backup, restore, reset-password, stop, ...) show their result in a
+message box and end at once (help: in a console window). Started by Task Scheduler
+or a Windows service they show nothing: their output goes to that log file, and the
+exit code says whether they succeeded.`
     : `Run ${exe} to start Lyren Plan.
 It opens the app in your browser and keeps running in its own window: keep that window
 open while you use Lyren Plan, and close it (or press Ctrl+C in it) to stop. If Lyren Plan
@@ -88,11 +91,25 @@ ${usage}
       Stop the Lyren Plan that runs with this data folder (or with the given
       --data-dir or --db-path), as ${win ? 'Quit or Ctrl+C' : 'Ctrl+C'} would.
   ${run} backup <file>
-      Write a consistent copy of the database to <file> (safe while Lyren Plan is
-      running; sign-in sessions are left out).
-  ${run} reset-password <user>
-      Set a new password and sign the user out everywhere. Reads the password from
+      Write a backup set (.tar) of the accounts and every space to <file>, e.g.
+      lyren-<date>.tar (safe while Lyren Plan is running; sign-in sessions are left
+      out).
+  ${run} restore <file>
+      Restore a backup set (.tar), one space's database or an old backup (.db).
+      It takes effect when Lyren Plan starts the next time: quit Lyren Plan and
+      start it again then. The data it replaces is moved to
+      ${backupsFolder}before-restore-<time> next to the database (in the data folder).
+  ${run} reset-password <email-or-username>
+      Set a new password, sign the account out everywhere and clear any lock-out
+      from failed sign-ins (the account's email address, or the username of an
+      account from before email addresses). Reads the password from
       ${pipe}
+  ${run} promote-admin <email-or-username>
+      Make the account an instance admin.
+  ${run} policy [open|invite_only|closed]
+      Show or set who can create accounts.
+  ${run} spaces
+      List the spaces, with their owners and sizes.
   ${run} help
       Show this help.
 
@@ -107,6 +124,8 @@ Options (each one sets the environment variable in brackets):${consoleOption}
 
 Defaults:
   Data folder   ${dataDir}
+                It holds lyren.db (the accounts), ${spacesFolder} (one database per space)
+                and ${backupsFolder} (automatic snapshots).
   Address       http://127.0.0.1:${DESKTOP_PORT}/ (this computer only). When the port is taken by
                 another program, the next free one up to ${DESKTOP_PORT + DESKTOP_PORT_SPAN - 1} is used (and
                 remembered when that happens on the first start).
@@ -313,8 +332,20 @@ export async function runDesktopCli(cliArgs: string[], { exe, embedded, damaged 
       case 'backup':
         backup(parsed.args[0], maintenance);
         break;
+      case 'restore':
+        await restore(parsed.args[0], maintenance);
+        break;
       case 'reset-password':
         await resetPassword(parsed.args[0], parsed.args[1], maintenance);
+        break;
+      case 'promote-admin':
+        promoteAdmin(parsed.args[0], maintenance);
+        break;
+      case 'policy':
+        policy(parsed.args[0], maintenance);
+        break;
+      case 'spaces':
+        spaces(maintenance);
         break;
       case 'help':
         console.log(help);

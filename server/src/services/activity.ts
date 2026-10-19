@@ -230,10 +230,13 @@ function asActivityData(text: string): ActivityData {
   return sanitizeActivityData(parseJson(text, {}));
 }
 
-/** Activity rows -> DTOs with the actor and the CURRENT task ref/title (null once deleted). Batched. */
+/**
+ * Activity rows -> DTOs with the actor, the importer (provenance, design §8.6) and the CURRENT task
+ * ref/title (null once deleted). Batched.
+ */
 export function hydrateActivity(db: Db, rows: readonly ActivityRow[]): ActivityDTO[] {
   if (rows.length === 0) return [];
-  const userIds = rows.map((r) => r.user_id).filter((id): id is number => id !== null);
+  const userIds = rows.flatMap((r) => [r.user_id, r.imported_by]).filter((id): id is number => id !== null);
   const taskIds = rows.map((r) => r.task_id).filter((id): id is number => id !== null);
   const users = new Map(
     (userIds.length === 0
@@ -254,21 +257,24 @@ export function hydrateActivity(db: Db, rows: readonly ActivityRow[]): ActivityD
         )
     ).map((t) => [t.id, { id: t.id, ref: t.ref, title: t.title }]),
   );
-  return rows.map((r) => {
-    const actorName = r.user_id === null ? undefined : users.get(r.user_id);
-    return {
-      id: r.id,
-      action: r.action as ActivityAction,
-      entityType: r.entity_type as ActivityEntityType,
-      entityId: r.entity_id,
-      projectId: r.project_id,
-      taskId: r.task_id,
-      data: asActivityData(r.data),
-      actor: r.user_id !== null && actorName !== undefined ? { id: r.user_id, displayName: actorName } : null,
-      createdAt: r.created_at,
-      task: r.task_id === null ? null : (tasks.get(r.task_id) ?? null),
-    };
-  });
+  const userRef = (id: number | null) => {
+    const displayName = id === null ? undefined : users.get(id);
+    return id !== null && displayName !== undefined ? { id, displayName } : null;
+  };
+  return rows.map((r) => ({
+    id: r.id,
+    action: r.action as ActivityAction,
+    entityType: r.entity_type as ActivityEntityType,
+    entityId: r.entity_id,
+    projectId: r.project_id,
+    taskId: r.task_id,
+    data: asActivityData(r.data),
+    actor: userRef(r.user_id),
+    createdAt: r.created_at,
+    task: r.task_id === null ? null : (tasks.get(r.task_id) ?? null),
+    importedBy: userRef(r.imported_by),
+    importedAt: r.imported_at,
+  }));
 }
 
 export interface ActivityListQuery {

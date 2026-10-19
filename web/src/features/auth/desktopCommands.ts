@@ -1,9 +1,9 @@
-// The single-file desktop app's commands as the sign-in page and Settings → Data show them
+// The single-file desktop app's commands as the sign-in page and Administration → Overview show them
 // (AuthStatusDTO.desktop / BootstrapDTO.desktop): for Command Prompt on Windows (for PowerShell
 // when Command Prompt would change them, see commandShell), for a POSIX shell on Linux and macOS,
 // run in the folder that holds the program.
 
-import type { DesktopAppDTO } from '@shared/types';
+import type { DesktopAppDTO, DesktopDataDTO } from '@shared/types';
 
 const POSIX_PLAIN = /^[\w@%+=:,./-]+$/;
 
@@ -50,6 +50,14 @@ export interface CommandTarget {
 }
 
 export const DEFAULT_TARGET: CommandTarget = { dataDir: null, dbPath: null };
+
+/**
+ * The database the running app opened, as its commands must name it: a command prompt opened later knows
+ * nothing of the DATA_DIR or DB_PATH this copy was started with.
+ */
+export function dataTarget(app: DesktopDataDTO): CommandTarget {
+  return { dataDir: app.customDataDir ? app.dataDir : null, dbPath: app.dbPath };
+}
 
 /** The option that points a command at `target`'s database (`--db-path` wins), or null for the default. */
 export function targetOption(target: CommandTarget): { name: '--db-path' | '--data-dir'; value: string } | null {
@@ -126,19 +134,7 @@ export function stopStep({ stopMode }: DesktopAppDTO): string {
   return 'Close the Lyren Plan window.';
 }
 
-/** After reset-password: how a lock-out (counted in the running app's memory) ends. */
-export function lockoutText({ stopMode }: DesktopAppDTO): string {
-  const lead = 'If you were locked out by too many attempts, wait 15 minutes, or';
-  if (stopMode === 'tray') {
-    return `${lead} quit Lyren Plan and start it again (to quit it, right-click its icon in the notification area and choose Quit Lyren Plan).`;
-  }
-  if (stopMode === 'terminal') {
-    return `${lead} stop Lyren Plan (press Ctrl+C in its window, or choose Quit Lyren Plan from its icon in the notification area) and start it again.`;
-  }
-  return `${lead} close the Lyren Plan window and start Lyren Plan again.`;
-}
-
-/** "Stop Lyren Plan" in Settings → Data: the usual way, before the stop command. */
+/** "Stop Lyren Plan" in Administration → Overview: the usual way, before the stop command. */
 export function stopHow({ stopMode }: DesktopAppDTO): string {
   if (stopMode === 'tray') {
     return 'Right-click the Lyren Plan icon in the notification area (near the clock; Windows may put it under the ^ arrow) and choose Quit Lyren Plan.';

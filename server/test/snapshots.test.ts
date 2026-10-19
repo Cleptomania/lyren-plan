@@ -1,16 +1,16 @@
 // Retention of the automatic safety snapshots (server/src/db/snapshots.ts): pre-import snapshots
-// written by POST /api/data/import and pre-upgrade snapshots written before a schema migration.
+// written by a replace import (POST /api/data/import/commit?mode=replace) and pre-upgrade snapshots written before a schema migration.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import type { ExportDTO } from '@shared/types';
 import { loadConfig } from '../src/config';
-import { openDb } from '../src/db';
 import { applyMigrations, SCHEMA_VERSION } from '../src/db/schema';
 import { DEFAULT_SNAPSHOT_KEEP, isSnapshotName, pruneSnapshots, snapshotStamp } from '../src/db/snapshots';
+import { openDb } from '../src/runtime/node/nodeDb';
 import { createTestContext } from './helpers';
+import { downloadArchive, replaceImport, v1Of } from './support/archive';
 
 const posix = process.platform !== 'win32';
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -212,12 +212,13 @@ describe('import snapshots', () => {
   async function importer(snapshotKeep: number) {
     const ctx = createTestContext({ snapshotKeep });
     const { client } = await ctx.signedIn();
-    const exported = (await client.get<ExportDTO>('/api/data/export')).body;
-    const backups = path.join(ctx.config.dataDir, 'backups');
+    const exported = v1Of((await downloadArchive(client)).archive!);
+    // §8.8, §9.5: each space's pre-import snapshots go to backups/spaces/<id>/.
+    const backups = path.join(ctx.config.dataDir, 'backups', 'spaces', ctx.spaceId);
     const importOnce = async () => {
-      const res = await client.post('/api/data/import', exported);
+      const res = await replaceImport(client, exported);
       expect(res.status, JSON.stringify(res.body)).toBe(200);
-      return path.basename(res.body.backupFile as string);
+      return path.basename(res.body.safety.path as string);
     };
     return { ctx, backups, importOnce };
   }
@@ -283,7 +284,8 @@ describe('pre-upgrade snapshots', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const db = openDb(file, { snapshotKeep: 99 }); // already current: no snapshot
     applyMigrations(db, migrations, { snapshotKeep: 2 });
-    expect(db.get<{ v: number }>('SELECT user_version AS v FROM pragma_user_version')!.v).toBe(2);
+    // user_version is Node-only: read it through raw, outside NodeDb's portability checks.
+    expect((db.raw.prepare('SELECT user_version AS v FROM pragma_user_version').get() as { v: number }).v).toBe(2);
     db.close();
 
     const upgrades = ls(backups).filter((n) => isSnapshotName('before-upgrade', n));

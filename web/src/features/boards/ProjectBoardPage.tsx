@@ -19,9 +19,12 @@ import type { BoardDTO, BootstrapDTO, ProjectDTO } from '@shared/types';
 import { useCreateBoard } from '../../api/boards';
 import { useLookups } from '../../api/bootstrap';
 import { qk } from '../../api/keys';
+import { useSpace, useSpaceId } from '../../app/space';
 import { FULL_BLEED_MAIN } from '../../components/layout/Page';
 import { usePersistentState } from '../../components/layout/usePersistentState';
 import { Button, IconButton, Menu, Tabs, type MenuItem } from '../../components/ui';
+import { spaceKey } from '../../lib/spaceStorage';
+import { boardUrl } from '../../lib/taskLinks';
 import { boardMenuItems, useBoardActions } from './boardActions';
 import { NewBoardDialog } from './NewBoardDialog';
 import { useBoardChrome, useBoardWorkspace, WorkspaceBody, WorkspaceFilterBar, type BoardChrome } from './workspace';
@@ -56,13 +59,14 @@ function Workspace({
   onSelect: (id: number | null) => void;
   boards: BoardDTO[];
 }) {
+  const sid = useSpaceId();
   const navigate = useNavigate();
   const actions = useBoardActions();
   const ws = useBoardWorkspace({ board, fallback, projectId: project.id, create, onCreated });
 
   const menu: MenuItem[] = board
     ? boardMenuItems(board, actions, {
-        extra: [{ label: 'Open as a page', icon: <ExternalLink />, onSelect: () => navigate(`/boards/${board.id}`) }],
+        extra: [{ label: 'Open as a page', icon: <ExternalLink />, onSelect: () => navigate(boardUrl(sid, board.id)) }],
         remove: {
           onConfirmed: () => {
             const next = boards.find((b) => b.id !== board.id);
@@ -91,10 +95,11 @@ function Workspace({
 }
 
 function ProjectBoards({ project }: { project: ProjectDTO }) {
+  const sid = useSpaceId();
   const lookups = useLookups();
   const boards = useMemo(() => lookups.boards.filter((b) => b.projectId === project.id), [lookups.boards, project.id]);
   const [params, setParams] = useSearchParams();
-  const [remembered, setRemembered] = usePersistentState<number>(`lyren.projectBoard.${project.id}`, 0, isBoardId);
+  const [remembered, setRemembered] = usePersistentState<number>(spaceKey(sid, `projectBoard.${project.id}`), 0, isBoardId);
   const requested = parseId(params.get(BOARD_PARAM));
   const selected = boards.find((b) => b.id === requested) ?? boards.find((b) => b.id === remembered) ?? boards[0] ?? null;
   const chrome = useBoardChrome();
@@ -121,9 +126,9 @@ function ProjectBoards({ project }: { project: ProjectDTO }) {
   const keepDefaultBoard = useCallback(async () => {
     await creatingDefault.current?.catch(() => undefined);
     // Read the cache, not the render's `boards`: a creation may have finished since.
-    const saved = qc.getQueryData<BootstrapDTO>(qk.bootstrap)?.boards.some((b) => b.projectId === project.id);
+    const saved = qc.getQueryData<BootstrapDTO>(qk.bootstrap(sid))?.boards.some((b) => b.projectId === project.id);
     if (!saved) await createDefault(fallback);
-  }, [qc, project.id, createDefault, fallback]);
+  }, [qc, sid, project.id, createDefault, fallback]);
 
   useEffect(() => {
     if (selected && selected.id !== remembered) setRemembered(selected.id);
@@ -144,6 +149,8 @@ function ProjectBoards({ project }: { project: ProjectDTO }) {
   );
 
   const tabs = boards.length > 0 ? boards.map((b) => ({ value: String(b.id), label: b.name })) : [{ value: 'new', label: 'Board' }];
+  // Viewers (design §12.9) look at the boards; nothing they change is saved (useBoardConfig).
+  const { write } = useSpace().permissions;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -155,9 +162,11 @@ function ProjectBoards({ project }: { project: ProjectDTO }) {
           items={tabs}
           className="min-w-0 flex-1"
         />
-        <Button size="sm" variant="ghost" icon={<Plus />} hideLabelOnMobile onClick={() => setNewOpen(true)} className="shrink-0">
-          New board
-        </Button>
+        {write && (
+          <Button size="sm" variant="ghost" icon={<Plus />} hideLabelOnMobile onClick={() => setNewOpen(true)} className="shrink-0">
+            New board
+          </Button>
+        )}
       </div>
       <Workspace
         key={selected?.id ?? 'new'}
@@ -170,13 +179,15 @@ function ProjectBoards({ project }: { project: ProjectDTO }) {
         onCreated={(b) => select(b.id)}
         onSelect={select}
       />
-      <NewBoardDialog
-        open={newOpen}
+      {write && (
+        <NewBoardDialog
+          open={newOpen}
         onClose={() => setNewOpen(false)}
         projectId={project.id}
         onCreated={(b) => select(b.id)}
-        beforeCreate={boards.length === 0 ? keepDefaultBoard : undefined}
-      />
+          beforeCreate={boards.length === 0 ? keepDefaultBoard : undefined}
+        />
+      )}
     </div>
   );
 }

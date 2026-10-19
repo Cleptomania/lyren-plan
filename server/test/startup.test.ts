@@ -4,14 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { sqlitePath } from '../src/db';
+import { sqlitePath } from '../src/runtime/node/nodeDb';
 import {
   dbOpenFailureMessage,
   dbOpenProblem,
   fileInTheWay,
+  inContainer,
   isDbAccessError,
   listenFailureMessage,
   missingWebClientMessage,
+  nearestFolder,
 } from '../src/startupErrors';
 
 const dirs: string[] = [];
@@ -19,6 +21,7 @@ afterAll(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 });
 
+const read = (file: string) => fs.readFileSync(new URL(`../../${file}`, import.meta.url), 'utf8');
 const sqliteError = (errcode: number, message: string) => Object.assign(new Error(message), { code: 'ERR_SQLITE_ERROR', errcode });
 const fsError = (code: string) => Object.assign(new Error(`${code}: permission denied, mkdir '/data'`), { code });
 
@@ -40,11 +43,43 @@ describe('isDbAccessError', () => {
 });
 
 describe('dbOpenFailureMessage', () => {
-  it('explains how to fix the permissions', () => {
-    const lines = dbOpenFailureMessage('/data/lyren.db', sqliteError(14, 'unable to open database file'), 1000);
-    expect(lines[0]).toBe('Could not open the database /data/lyren.db: unable to open database file');
-    expect(lines.join('\n')).toContain('The directory /data and the files in it must be writable by the user running the server (uid 1000).');
-    expect(lines.join('\n')).toContain('sudo chown -R 1000:1000');
+  const unwritable = sqliteError(14, 'unable to open database file');
+
+  it('explains how to fix the permissions, with the Docker advice only in a container', () => {
+    expect(dbOpenFailureMessage('/data/lyren.db', unwritable, 1000, 'server', 'linux', true)).toEqual([
+      'Could not open the database /data/lyren.db: unable to open database file',
+      'The directory /data and the files in it must be writable by the user running the server (uid 1000).',
+      'Docker: the container runs as uid 1000, so give a bind-mounted data directory to it, e.g.',
+      '  sudo chown -R 1000:1000 ./data',
+    ]);
+    // systemd, the release tarball, a shell: the fix for this user and folder.
+    expect(dbOpenFailureMessage('/srv/lyren/data/lyren.db', unwritable, 998, 'server', 'linux', false)).toEqual([
+      'Could not open the database /srv/lyren/data/lyren.db: unable to open database file',
+      'The directory /srv/lyren/data and the files in it must be writable by the user running the server (uid 998).',
+      'Give them to that user (e.g. sudo chown -R 998 /srv/lyren/data), or set DATA_DIR to a directory it owns.',
+    ]);
+    expect(dbOpenFailureMessage("/srv/it's mine/lyren.db", unwritable, 998, 'server', 'linux', false)[2]).toBe(
+      "Give them to that user (e.g. sudo chown -R 998 '/srv/it'\\''s mine'), or set DATA_DIR to a directory it owns.",
+    );
+    expect(dbOpenFailureMessage('D:\\Lyren\\lyren.db', unwritable, undefined, 'server', 'win32', false).at(-1)).toBe(
+      'Set DATA_DIR to a directory this user can write to.',
+    );
+  });
+
+  it('knows a container by the image\'s variable, /.dockerenv or /run/.containerenv', () => {
+    const none = () => false;
+    expect(inContainer({ LYREN_CONTAINER: '1' }, none)).toBe(true);
+    expect(inContainer({}, (file) => file === '/.dockerenv')).toBe(true);
+    expect(inContainer({}, (file) => file === '/run/.containerenv')).toBe(true);
+    expect(inContainer({ LYREN_CONTAINER: '' }, none)).toBe(false);
+    expect(read('Dockerfile')).toMatch(/^\s+LYREN_CONTAINER=1/m);
+  });
+
+  it('the env_file that docker-compose.yml suggests for secrets is neither committed nor built into the image', () => {
+    expect(read('docker-compose.yml')).toMatch(/^\s+#\s+- lyren-secrets\.env$/m);
+    // The build stage copies the checkout (COPY . .): only .dockerignore keeps the file out of its layers.
+    expect(read('Dockerfile')).toMatch(/^COPY \. \.$/m);
+    for (const file of ['.gitignore', '.dockerignore']) expect(read(file).split('\n'), file).toContain('*.env');
   });
 
   it('just states other errors', () => {
@@ -65,6 +100,28 @@ describe('a data folder that cannot be created', () => {
     expect(desktop).toContain('does not exist (for example an unplugged USB drive)');
     expect(desktop).toContain('--data-dir');
     expect(dbOpenFailureMessage('/mnt/usb/lyren/lyren.db', err, 1000, 'server', 'linux').join('\n')).toContain('DATA_DIR');
+  });
+
+  it('a folder this user may not create: the folder above it, and how to create it (no chown of a missing folder)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lyren-mkdir-'));
+    dirs.push(dir);
+    // The mode does not matter here: the error says mkdir failed, and the folder above is the nearest that exists.
+    const dataDir = path.join(dir, 'ro', 'data');
+    fs.mkdirSync(path.join(dir, 'ro'));
+    expect(nearestFolder(dataDir)).toBe(path.join(dir, 'ro'));
+    expect(nearestFolder(path.join(dir, 'ro', 'a', 'b'))).toBe(path.join(dir, 'ro'));
+    expect(nearestFolder(dir)).toBe(dir);
+    const err = mkdirError('EACCES', dataDir);
+    expect(dbOpenProblem(path.join(dataDir, 'lyren.db'), err, 'linux')).toBe('access');
+    expect(dbOpenFailureMessage(path.join(dataDir, 'lyren.db'), err, 1000, 'server', 'linux', false)).toEqual([
+      `Could not open the database ${path.join(dataDir, 'lyren.db')}: EACCES: mkdir '${dataDir}'`,
+      `The directory ${dataDir} and the files in it must be writable by the user running the server (uid 1000).`,
+      `It does not exist yet, and this user cannot create it in ${path.join(dir, 'ro')}.`,
+      `Create it for that user (e.g. sudo install -d -o 1000 -m 700 ${dataDir}), or set DATA_DIR to a directory it owns.`,
+    ]);
+    // In a container, and for a folder that exists, as before.
+    expect(dbOpenFailureMessage(path.join(dataDir, 'lyren.db'), err, 1000, 'server', 'linux', true)[2]).toMatch(/^Docker:/);
+    expect(dbOpenFailureMessage(path.join(dataDir, 'lyren.db'), fsError('EACCES'), 1000, 'server', 'linux', false)[2]).toMatch(/^Give them to that user/);
   });
 
   it('a file where the folder (or a folder above it) should be', () => {

@@ -1,5 +1,7 @@
 // Recently opened tasks and boards for the command palette's empty state. A per-device
-// convenience kept in localStorage (small: at most RECENT_MAX entries, newest first).
+// convenience kept in localStorage per space (small: at most RECENT_MAX entries, newest first).
+
+import { spaceKey } from '../../lib/spaceStorage';
 
 /** `archived`: the task was archived when last seen (stored only when true). */
 export type RecentItem =
@@ -10,7 +12,8 @@ export type RecentInput =
   | { kind: 'task'; id: number; ref: string; title: string; archived?: boolean }
   | { kind: 'board'; id: number; name: string };
 
-export const RECENT_KEY = 'lyren.palette.recent';
+/** The space's list (lyren.s.<spaceId>.palette.recent). */
+export const recentKey = (spaceId: string) => spaceKey(spaceId, 'palette.recent');
 export const RECENT_MAX = 8;
 
 const isId = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
@@ -67,17 +70,17 @@ export function removeRecent(list: readonly RecentItem[], kind: RecentItem['kind
 
 // ---- Storage (never throws: private mode / disabled storage just means no history) ------------
 
-export function loadRecent(): RecentItem[] {
+export function loadRecent(spaceId: string): RecentItem[] {
   try {
-    return parseRecent(window.localStorage.getItem(RECENT_KEY));
+    return parseRecent(window.localStorage.getItem(recentKey(spaceId)));
   } catch {
     return [];
   }
 }
 
-function save(list: readonly RecentItem[]): void {
+function save(spaceId: string, list: readonly RecentItem[]): void {
   try {
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+    window.localStorage.setItem(recentKey(spaceId), JSON.stringify(list));
   } catch {
     /* storage unavailable or full */
   }
@@ -91,17 +94,17 @@ function sameEntry(a: RecentItem, b: RecentInput): boolean {
   return false;
 }
 
-export function rememberRecent(item: RecentInput): void {
-  const list = loadRecent();
+export function rememberRecent(spaceId: string, item: RecentInput): void {
+  const list = loadRecent(spaceId);
   // Re-opening the newest entry unchanged is a no-op (no storage write).
   if (list[0] && sameEntry(list[0], item)) return;
-  save(addRecent(list, item, Date.now()));
+  save(spaceId, addRecent(list, item, Date.now()));
 }
 
-export function forgetRecent(kind: RecentItem['kind'], id: number): void {
-  const list = loadRecent();
+export function forgetRecent(spaceId: string, kind: RecentItem['kind'], id: number): void {
+  const list = loadRecent(spaceId);
   const next = removeRecent(list, kind, id);
-  if (next.length !== list.length) save(next);
+  if (next.length !== list.length) save(spaceId, next);
 }
 
 /** What the server says about a recent task now; null = it no longer exists. */
@@ -127,9 +130,9 @@ export function applyRecentUpdates(list: readonly RecentItem[], updates: Readonl
 }
 
 /** Store what the server said about recent tasks (another device may have changed them). */
-export function refreshRecentTasks(updates: ReadonlyMap<number, RecentTaskUpdate>): void {
+export function refreshRecentTasks(spaceId: string, updates: ReadonlyMap<number, RecentTaskUpdate>): void {
   if (updates.size === 0) return;
-  const list = loadRecent();
+  const list = loadRecent(spaceId);
   const next = applyRecentUpdates(list, updates);
-  if (next !== list) save(next);
+  if (next !== list) save(spaceId, next);
 }

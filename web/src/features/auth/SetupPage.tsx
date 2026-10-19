@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'rea
 import { useLocation, useNavigate } from 'react-router';
 import { LIMITS } from '@shared/constants';
 import { localToday } from '@shared/dates';
-import { setupInput } from '@shared/schemas';
+import { setupInput, type SetupInput } from '@shared/schemas';
 import { useAuthStatus, useSetup } from '../../api/auth';
 import { ApiError } from '../../api/client';
 import { qk } from '../../api/keys';
@@ -25,14 +25,14 @@ import { hashWithoutSetupCode, setupCodeFromHash, setupCodeHelp } from './setupL
 
 interface SetupValues {
   displayName: string;
-  username: string;
+  email: string;
   password: string;
   setupCode: string;
   createSampleData: boolean;
 }
 
-type TextKey = 'displayName' | 'username' | 'password' | 'setupCode';
-const FIELD_ORDER: TextKey[] = ['setupCode', 'displayName', 'username', 'password'];
+type TextKey = 'displayName' | 'email' | 'password' | 'setupCode';
+const FIELD_ORDER: TextKey[] = ['setupCode', 'displayName', 'email', 'password'];
 
 export default function SetupPage() {
   useDocumentTitle('Set up');
@@ -47,7 +47,7 @@ export default function SetupPage() {
   const [linkCode] = useState(() => setupCodeFromHash(location.hash));
   const [values, setValues] = useState<SetupValues>({
     displayName: '',
-    username: '',
+    email: '',
     password: '',
     setupCode: linkCode ?? '',
     createSampleData: true,
@@ -64,7 +64,7 @@ export default function SetupPage() {
   const refs: Record<TextKey, RefObject<HTMLInputElement | null>> = {
     setupCode: useRef<HTMLInputElement>(null),
     displayName: useRef<HTMLInputElement>(null),
-    username: useRef<HTMLInputElement>(null),
+    email: useRef<HTMLInputElement>(null),
     password: useRef<HTMLInputElement>(null),
   };
 
@@ -81,19 +81,18 @@ export default function SetupPage() {
     e.preventDefault();
     if (setup.isPending) return;
     setFormError(null);
-    const parsed = setupInput.safeParse({
+    const input: SetupInput = {
       displayName: values.displayName,
-      username: values.username,
+      email: values.email,
       password: values.password,
       createSampleData: values.createSampleData,
       setupCode: codeRequired ? values.setupCode.trim() : undefined,
       today: localToday(),
-    });
+    };
+    const parsed = setupInput.safeParse(input);
     const fe = parsed.success ? {} : zodFieldErrors(parsed.error);
-    const name = values.username.trim();
-    if (fe.username && (name.length < LIMITS.usernameMin || name.length > LIMITS.usernameMax)) {
-      fe.username = `${LIMITS.usernameMin}–${LIMITS.usernameMax} characters`;
-    }
+    const minLength = status?.instance.passwordMinLength ?? LIMITS.passwordMin;
+    if (!fe.password && values.password.length < minLength) fe.password = `At least ${minLength} characters`;
     if (codeRequired && !values.setupCode.trim()) fe.setupCode = 'Required';
     if (!parsed.success || Object.keys(fe).length > 0) {
       setErrors(fe);
@@ -101,7 +100,7 @@ export default function SetupPage() {
       return;
     }
     setErrors({});
-    setup.mutate(parsed.data, {
+    setup.mutate(input, {
       onError: (err) => {
         if (err instanceof ApiError && err.status === 409) {
           // Someone else finished setup meanwhile: the auth gate will switch to sign-in.
@@ -167,20 +166,26 @@ export default function SetupPage() {
             maxLength={LIMITS.displayNameMax}
           />
         </Field>
-        <Field label="Username" required error={errors.username} hint="Letters, numbers, dots, dashes or underscores.">
+        <Field label="Email" required error={errors.email} hint="Used to sign in.">
           <Input
-            ref={refs.username}
-            name="username"
-            value={values.username}
-            onChange={set('username')}
-            autoComplete="username"
+            ref={refs.email}
+            type="email"
+            name="email"
+            value={values.email}
+            onChange={set('email')}
+            autoComplete="email"
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            maxLength={LIMITS.usernameMax}
+            maxLength={LIMITS.identifierMax}
           />
         </Field>
-        <Field label="Password" required error={errors.password} hint={`At least ${LIMITS.passwordMin} characters.`}>
+        <Field
+          label="Password"
+          required
+          error={errors.password}
+          hint={`At least ${status?.instance.passwordMinLength ?? LIMITS.passwordMin} characters.`}
+        >
           <PasswordInput
             ref={refs.password}
             name="new-password"

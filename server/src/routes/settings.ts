@@ -1,7 +1,9 @@
-// /api/settings — server-side preferences (SPEC §5.9). Theme is per device (web localStorage).
+// /api/settings — the space's settings (SPEC §5.9, design §3.6): estimateUnit and defaultBoardId. The
+// per-user preferences are PATCH /api/account/preferences in the directory; theme is per device (web
+// localStorage).
 
 import { Hono } from 'hono';
-import { settingsUpdateInput } from '@shared/schemas';
+import { spaceSettingsUpdateInput } from '@shared/schemas';
 import type { AppEnv, Deps } from '../env';
 import { readJson } from '../http/validate';
 import { getSettings, saveSettings } from '../services/settings';
@@ -11,9 +13,12 @@ export function settingsRoutes({ db }: Deps) {
 
   r.get('/', (c) => c.json(getSettings(db)));
 
-  /** Partial update; `defaultBoardId` must reference an existing board (400, path defaultBoardId). */
+  /**
+   * Partial update (unknown keys are stripped); `defaultBoardId` must reference an existing board (400,
+   * path defaultBoardId).
+   */
   r.patch('/', async (c) => {
-    const input = await readJson(c, settingsUpdateInput);
+    const input = await readJson(c, spaceSettingsUpdateInput);
     return c.json(saveSettings(db, input));
   });
 

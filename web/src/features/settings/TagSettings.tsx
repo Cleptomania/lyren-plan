@@ -1,4 +1,5 @@
-// Settings → Tags: search, create, rename / recolor inline, merge into another tag, delete.
+// Settings → Tags: search, create, rename / recolor inline (members and up), merge into another tag and
+// delete (admins and owners, design §6.2).
 // Edits are optimistic through the bootstrap cache (rolled back with an error toast).
 
 import { useQueryClient } from '@tanstack/react-query';
@@ -7,10 +8,11 @@ import { useDeferredValue, useMemo, useState, type FormEvent } from 'react';
 import { LIMITS } from '@shared/constants';
 import { tagCreateInput } from '@shared/schemas';
 import type { TagDTO } from '@shared/types';
-import { useCreateTag, useDeleteTag, useMergeTag, useUpdateTag } from '../../api/admin';
+import { useCreateTag, useDeleteTag, useMergeTag, useUpdateTag } from '../../api/spaceAdmin';
 import { useLookups } from '../../api/bootstrap';
 import { ApiError } from '../../api/client';
 import { qk } from '../../api/keys';
+import { useSpace, useSpaceId } from '../../app/space';
 import { paletteColor } from '../../components/domain';
 import {
   Button,
@@ -56,6 +58,7 @@ interface TagItemProps {
 }
 
 function TagItem({ tag, onPatch, onMerge, onDelete }: TagItemProps) {
+  const { manageStructure } = useSpace().permissions;
   const [editing, setEditing] = useState(false);
   return (
     <li className="flex min-w-0 items-center gap-1 px-2 py-1.5 md:gap-2">
@@ -77,9 +80,9 @@ function TagItem({ tag, onPatch, onMerge, onDelete }: TagItemProps) {
         trigger={<IconButton aria-label={`Actions for “${tag.name}”`} icon={<MoreHorizontal />} size="sm" />}
         items={[
           { label: 'Rename', icon: <Pencil />, onSelect: () => setEditing(true) },
-          { label: 'Merge into…', icon: <GitMerge />, onSelect: () => onMerge(tag) },
+          manageStructure && { label: 'Merge into…', icon: <GitMerge />, onSelect: () => onMerge(tag) },
           { separator: true },
-          { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => onDelete(tag) },
+          manageStructure && { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => onDelete(tag) },
         ]}
       />
     </li>
@@ -261,6 +264,7 @@ function MergeTagDialog({ tag, onClose }: { tag: TagDTO | null; onClose: () => v
 
 export default function TagSettings() {
   const { tags } = useLookups();
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const optimistic = useOptimisticBootstrap();
   const update = useUpdateTag();
@@ -301,7 +305,7 @@ export default function TagSettings() {
       onError: (err) => {
         rollback();
         toast.error(err);
-        void qc.invalidateQueries({ queryKey: qk.bootstrap });
+        void qc.invalidateQueries({ queryKey: qk.bootstrap(sid) });
       },
     });
   };

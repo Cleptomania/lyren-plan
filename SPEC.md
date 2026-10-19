@@ -1,8 +1,11 @@
 # Lyren Plan — Engineering Spec (the contract)
 
-Lyren Plan is a **self-hosted, single-owner project management app**: projects → milestones → epics → tasks,
-with highly configurable boards, tags, comments, work logs and an activity history. One Node.js process
-serves a JSON API and a React SPA, storing everything in one SQLite file. **No third-party services, CDNs,
+Lyren Plan is a **self-hosted project management app** for one person or a small team: accounts, and spaces
+that each hold their own projects → milestones → epics → tasks, with highly configurable boards, tags,
+comments, work logs and an activity history, shared with members by role (docs/design/multi-user-and-cloudflare.md).
+One Node.js process serves a JSON API and a React SPA, storing the accounts in one SQLite file (the directory)
+and each space in a file of its own; the same apps also run on Cloudflare, a Worker in front of one SQLite-backed
+Durable Object for the directory and one per space (§12.2). **No third-party services, CDNs,
 web fonts, analytics or outbound network calls — ever** (the browser must never fetch anything from another
 origin either). It must work well on phones (mobile browsers, installable as a PWA) and desktops.
 
@@ -34,16 +37,56 @@ report it instead.
   server-side, several per project).
 - Dashboard (overdue / due today / due soon / in progress / recently done / activity / project progress).
 - Global search + command palette (mod+K).
-- Settings: account (display name, password, sessions), preferences (theme, week start, estimate unit,
-  home page), statuses, tags, data (JSON export/import, SQLite backup download).
-- First-run setup screen (setup code from the server log, create owner account, optional sample data),
-  login, logout, password reset CLI, backup CLI.
+- Settings: the account's (profile: name, email address with its verification and changes; security: password,
+  passkeys, sessions, security events; preferences: theme, week start, home page; danger zone: delete the account), a
+  space's (general: name, estimate unit, default board; members; invitations; statuses; tags; data: the space
+  archive's download, importing into a new space, replacing the space; danger zone: leave, transfer, delete), and
+  the instance administration (overview: warnings, the instance and its configuration, the recent
+  administrative actions of every admin, a test email, the backup set download and the self-hosting notes on
+  Node; settings: the sign-up policy and the password minimum; users: search, disable or enable, administrator
+  rights, reset links, delete; instance invitations; spaces: search, delete, restore). Each shown by the role
+  (§9 "Viewer mode").
+- Accounts and spaces (design §5, §6): sign-in by email address or the username of a 1.x account; every
+  account gets a space of its own; spaces can be created, renamed, deleted (restorable for
+  `SPACE_DELETE_GRACE_DAYS`) and shared with members as owner, admin, member or viewer; instance admins.
+  Invitations to a space (by mail, or without mail a link the inviter passes on) and instance invitations;
+  open sign-up with email verification (`SIGNUP_POLICY` `open`; `invite_only` by default, or `closed`); email
+  verification and email change (both confirmed in the account's own session); forgotten passwords by mail, reset
+  links from an admin, and the operator's recovery token (`RECOVERY_TOKEN`); the security notices (design
+  §5.8.5-§5.8.11, §5.8.19).
+- Space archives (design §8, §12.10; §5.10): a space's owners download its archive (gzip JSON, the people its
+  entries name included); anyone imports one into a new space of their own (/spaces → "Import a space…"), and
+  owners replace a space's content with one, after mapping each person the archive names to an account they can
+  see or keeping the name only; entries attributed to someone else say who imported them, the person can disown
+  them, and admins reassign a former member's entries to a member.
+- Passkeys (design §5.6, §5.8.3, §5.8.12-§5.8.14): sign-in with a discoverable passkey (no identifier; a button
+  and the sign-in field's autofill), up to 20 per account, added, renamed and removed in Account settings →
+  Security, re-authentication with one, an account without a password (only with a passkey that works here and a
+  way back in), and sign-up, invitation acceptance and a reset link with a passkey instead of a password (a reset's
+  passkey replaces the password unless the account would then have no way back in). On only
+  when `PUBLIC_URL` is an https origin (or `http://localhost`) whose host is a name; the RP ID is
+  `WEBAUTHN_RP_ID` or that host, never taken from a request. A passkey registered for another RP ID (a domain
+  move) is shown as such and no longer counts as a way to sign in.
+- Mail (design §5.10, §12 below): `MAIL_TRANSPORT` `log` (the default: nothing is sent, one line is logged),
+  `smtp` (our own client: implicit TLS or STARTTLS, the certificate verified against `SMTP_HOST`, AUTH PLAIN or
+  LOGIN only over TLS; `none` only to a mail server on this machine), `resend` or `cloudflare` (a `send_email`
+  binding, Workers Paid); daily budgets (`MAIL_DAILY_CAP`, 40% of it for anonymous requests, 5 messages a day
+  per address except the security notices); a test message from Administration (`POST /api/admin/mail/test`).
+- First-run setup screen (setup code from the server log, create the first account, an instance admin, by
+  email, optional sample data), login, logout, and the CLI's backup, restore, reset-password, promote-admin,
+  policy and spaces commands (§12).
 - Mobile: every screen usable at 360px wide; touch drag & drop with long-press plus non-drag alternatives
   (menus) for every drag action; bottom navigation; full-screen sheets for dialogs/drawers; Back gesture
   closes sheets; installable PWA with an offline app shell.
-- Self-hosting: `npm ci && npm run build && npm start`, or Docker / docker-compose. Data in `DATA_DIR`.
+- Self-hosting: `npm ci && npm run build && npm start`, the release archive `lyren-plan-<version>-node.tar.gz` on any
+  Node ≥ 22.13 (systemd on Ubuntu 26.04: `docs/ubuntu-server.md`, §12), or Docker / docker-compose. Data in `DATA_DIR`
+  (`lyren.db`, `spaces/`, `backups/`).
 - Single-file desktop app (§12.1): `npm run package:win` → one Windows exe that needs nothing installed;
   double-click starts the server and opens the browser; data in `%LOCALAPPDATA%\Lyren Plan`.
+- Cloudflare (§12.2; docs/cloudflare.md): the Worker and Durable Objects runtime on the Workers Free plan, its
+  defaults sized for it; deployed from this repository with nothing of one deployment committed, by `wrangler
+  deploy` from a checkout, the manual GitHub workflow `deploy-cloudflare.yml` in a fork, or the Deploy to
+  Cloudflare button (README); `npm run dev:cf` locally and `npm run check:cf` (an offline dry run).
 
 ---------------------------------------------------------------------------------------------------------
 
@@ -52,10 +95,11 @@ report it instead.
 | Layer   | Choice |
 |---------|--------|
 | Runtime | Node.js ≥ 22.13 (dev: 24). **`node:sqlite`** built-in (no native modules). |
-| Server  | Hono 4 + @hono/node-server 1, zod 4, fractional-indexing 3. Bundled to one file by esbuild. |
-| Web     | React 19, react-router 7 (library mode, import from `react-router`), @tanstack/react-query 5, Tailwind CSS 4, @dnd-kit/core 6 + sortable 10 + utilities 3, @floating-ui/react 0.27, lucide-react (0.5xx icon names), react-markdown 10 + remark-gfm 4, clsx. |
-| Tests   | vitest 4 (node environment). |
+| Server  | Hono 4.13.9, pinned exactly (the gate relies on `matchedRoutes`, design Appendix D 2) + @hono/node-server 1, zod 4, fractional-indexing 3, @simplewebauthn/server 14.0.3 (passkeys; npm `overrides` hold its @peculiar/asn1-* at 2.10.0, @peculiar/x509 at 2.1.0 and asn1js at 3.0.10). Bundled to one file by esbuild. |
+| Web     | React 19, react-router 7 (library mode, import from `react-router`), @tanstack/react-query 5, Tailwind CSS 4, @dnd-kit/core 6 + sortable 10 + utilities 3, @floating-ui/react 0.27, lucide-react (0.5xx icon names), react-markdown 10 + remark-gfm 4, clsx, @simplewebauthn/browser 14.0.0. |
+| Tests   | vitest 4, two projects (§10): `node` (node environment) and `workers` (@cloudflare/vitest-plugin 1.3.6, in workerd). |
 | TS      | TypeScript 5.9, strict, `noUncheckedIndexedAccess`, `verbatimModuleSyntax` (use `import type`). |
+| Cloudflare | Dev-only, pinned to exact versions: `wrangler` 4.147.0, `@cloudflare/workers-types` 5.20261001.1, `@cloudflare/vitest-plugin` 1.3.6 (the Cloudflare runtime's typecheck and tests; docs/design/multi-user-and-cloudflare.md §10). |
 
 **No new npm dependencies** may be installed (parallel installs corrupt node_modules). If you truly need one,
 say so in your report. Build-time only, for the single-file app (§12.1), pinned to exact versions:
@@ -72,29 +116,70 @@ are also fine).
 
 ```
 shared/src/            CONTRACT (owner: lead). constants, dates, duration, schemas (zod inputs), board (config +
-                       grouping helpers), filter (reference filter/sort semantics), export (import schema),
-                       types (DTOs). Pure TS — no Node/DOM APIs.
+                       grouping helpers), filter (reference filter/sort semantics), export (v1 import schema),
+                       archive (archive v2 schema, file names, gzip detection; design §8.2),
+                       types (DTOs), email (normalizeEmail, emailSchema), ids (space ids), roles (space roles and
+                       permissions; docs/design/multi-user-and-cloudflare.md §5.2, §4.2, §6), bounded (parseBounded:
+                       bounded validation of large values, design Appendix D 44). Pure TS — no Node/DOM APIs.
 server/src/
-  index.ts             entry of the Node build / Docker (lead); cli.ts: the commands serve, backup, reset-password,
-                       help (lead); startupErrors.ts: plain-language start-up failures (lead)
+  index.ts             entry of the Node build / Docker (lead); cli.ts: the commands serve, backup, restore,
+                       reset-password, promote-admin, policy, spaces, help (lead); startupErrors.ts: plain-language
+                       start-up failures (lead)
   sea.ts desktop/      entry and runtime of the single-file desktop app (§12.1) (lead)
-  config.ts env.ts     config / Deps / AppEnv (lead)
-  app.ts               middleware + route mounting (lead) — routes are already mounted, don't edit
-  db/index.ts          Db wrapper (lead)        db/schema.ts  migrations (lead)   db/seed.ts (lead; createSampleData: server-domain)
+  config.ts env.ts     config (lead); env.ts: the space app's Deps, SpaceActor and AppEnv (design §2.5) (lead)
+  gateway/             the gateway (design §2.1): guards.ts (canonical paths, CSRF, Content-Length, routing, the
+                       session token; shared with the Cloudflare Worker), app.ts (createGatewayApp, Node's gateway)
+                       (lead)
+  core/                runtime-neutral: db.ts (the Db interface, SQL scanner), migrate.ts, config.ts (the settings
+                       both runtimes share, from a string map; config.ts adds Node's), ports, cookies, … (lead)
+  directory/ space/    the directory and space databases' schemas (schema.ts; design §3.2, §3.3) (lead);
+                       directory/ also the directory app and service: accounts, sessions, throttles, spaces and
+                       memberships (createDirectoryApp; design §2.5, §5, §6.3) (lead); space/ also the space app
+                       (app.ts: the gate, then the routes below), its host (host.ts: path rewrite, authorization,
+                       auth cache, mirror sync), gate.ts (GATE_RULES, §6.4), writeState.ts (ETags and the write
+                       budget), mirror.ts (the users mirror), init.ts (a new space's database), safety.ts,
+                       context.ts (currentUser, currentIdentity), people.ts (reassign and disown, §5.10), archive/
+                       (archive v2: export.ts, read.ts with values.ts, validate.ts, analysis.ts, estimate.ts,
+                       commit.ts; design §8) (lead)
+  mail/                mail (design §5.10): transport.ts (createMailTransport, MailTransport), log.ts, smtp/client.ts
+                       (our SMTP client over a runtime's connector), resend.ts, cloudflare.ts (the drivers),
+                       message.ts (the MIME builder, header checks, mailSafeName), templates.ts (every message as
+                       text and HTML), errors.ts (MailError, redact); the sending policy is directory/mailer.ts
+                       (budgets, deferral, mail_failed events); the connectors are runtime/node/smtpConnector.ts
+                       (node:net, node:tls) and runtime/cloudflare/smtpConnector.ts (cloudflare:sockets) (lead)
+  runtime/node/        nodeDb.ts: NodeDb, the Db on node:sqlite, openDb; stack.ts: openNodeStack (everything a Node
+                       process serves); spaceStore.ts, spaceClient.ts, directoryClient.ts; clientIp.ts (TRUST_PROXY,
+                       COOKIE_SECURE); desktop.ts (what the web client learns about the desktop app); legacy.ts
+                       (the 1.x upgrade), backupSet.ts and tar.ts (backup sets), restore.ts (staging and applying a
+                       restore), owner.ts (the root check), files.ts (retried renames, fsync), maintenance.ts (lead);
+                       runtime/cloudflare/: the Cloudflare runtime (design §10): worker.ts (the Worker: the gateway's
+                       guards, the host check, HSTS; the entry Wrangler bundles), directoryDo.ts and spaceDo.ts (the
+                       Durable Objects), clients.ts (stub.fetch and RPC between them), config.ts (env → AppConfig),
+                       objects.ts, env.ts, DoDb (lead)
+  db/index.ts          Db types (lead)          db/schema.ts  migrations (lead)   db/seed.ts (lead; createSampleData: server-domain)
   db/snapshots.ts      automatic snapshot names and retention (SNAPSHOT_KEEP, §12) (lead)
-  http/                errors, validate, static (lead)
-  auth/                sessions, passwords, middleware, /api/auth routes (lead)
+  http/                errors, validate, headers (the security headers), static (lead)
   services/            domain services (server-domain agent) — see §6
   routes/<area>.ts     one Hono router factory per area (feature agents) — stubs exist
 server/test/           vitest API tests; helpers.ts gives createTestContext() (lead)
-web/index.html web/public/   (web-foundation agent: manifest, icons, favicon, service worker; theme-init.js is lead's)
+web/index.html web/public/   (web-foundation agent: manifest, icons, favicon, service worker; theme-init.js and _headers,
+                       the static assets' security headers on Cloudflare, are lead's)
 web/vite.config.ts web/devProxy.ts   build config; the dev server proxies /api to PORT/HOST or LYREN_API_URL (lead)
 scripts/package.mjs scripts/lib/   the single-file app's packaging and its pure helpers, tested in scripts/test (lead)
-.github/workflows/release.yml scripts/ci/   release workflow, its Windows smoke test and publishing script (§12.1) (lead)
+wrangler.jsonc .dev.vars.example scripts/cf/   the Cloudflare Worker's configuration, its local secrets template, and
+                       the web build Wrangler runs (design §10.8); server/test-workers/ its tests (lead)
+scripts/pack-node.mjs scripts/lib/node-tarball.mjs   the release archive for Node.js installs (§12) (lead)
+.github/workflows/release.yml scripts/ci/   release workflow, its smoke tests (Windows exe, Node.js archive) and publishing script (§12.1) (lead)
+.github/workflows/deploy-cloudflare.yml scripts/ci/{deploy-cloudflare,write-secrets-file}.sh scripts/ci/wrangler-config.mjs
+scripts/lib/cloudflare.mjs   the Cloudflare deploy workflow, its scripts and their JSONC helpers (§12.2), tested in
+                       scripts/test/deploy-cloudflare.test.mjs and wrangler-config.test.mjs (lead)
+docs/cloudflare.md     the Cloudflare runbook, configuration reference and measured costs (§12.2) (lead)
+docs/ubuntu-server.md   installing on Ubuntu Server 26.04 with systemd and Ubuntu's nodejs (§12) (lead)
 web/src/
-  main.tsx app/        root, router, auth gates (lead)
-  api/                 fetch client + ALL React Query hooks (lead) — the web↔API contract
-  lib/                 theme, format, colors, hooks, events, taskLinks, overlays (lead)
+  main.tsx app/        root, router, auth gates, the space context and layouts (space.ts, SpaceLayout.tsx,
+                       DirectoryLayout.tsx), the old links' redirect (legacyRedirect.ts) (lead)
+  api/                 fetch client (the ETag store, error mapping) + ALL React Query hooks (lead) — the web↔API contract
+  lib/                 theme, format, colors, hooks, events, taskLinks, overlays, spaceStorage (lead)
   components/ui/       design-system primitives (web-foundation agent)
   components/layout/   AppShell, PageHeader, nav (web-foundation agent)
   components/domain/   task/status/tag/... display components, pickers, TaskActionsMenu (web-domain agent)
@@ -112,7 +197,7 @@ Feature ownership (web + server):
 | tasks             | tasks.ts (+ services/taskMutations.ts)                    | tasks/                                           |
 | timeline          | timeline.ts                                               | timeline/                                        |
 | boards            | boards.ts                                                 | boards/                                          |
-| admin             | tags.ts, statuses.ts, settings.ts, data.ts                | settings/                                        |
+| admin             | tags.ts, statuses.ts, settings.ts, data.ts                | settings/, import/                               |
 | dashboard-search  | dashboard.ts, search.ts                                   | dashboard/, search/                              |
 
 Only edit files you own. If you need a change elsewhere (a bug in a shared component, a missing hook),
@@ -122,23 +207,44 @@ make the smallest possible fix, keep exported signatures backwards compatible, a
 
 ## 4. Server conventions
 
-- **Route factories**: `export function xRoutes({ db, config }: Deps) { const r = new Hono<AppEnv>(); ...; return r; }`.
-  Paths inside a router are relative to its mount point (see app.ts). All routes except `/api/health` and
-  `/api/auth/{status,setup,login,logout}` are already behind `requireAuth`; use `currentUser(c)` from
-  `auth/context.ts` to get the user row. Middleware order in app.ts: CSRF header → session → auth gate →
-  body limit (import 50 MiB, public auth paths 64 KiB, else 2 MiB) → gzip, so requests that will be refused
-  are refused before any body byte is read (bodyLimit buffers chunked bodies before calling next()).
+- **Route factories**: `export function xRoutes({ db, config, space }: Deps) { const r = new Hono<AppEnv>(); ...; return r; }`.
+  Paths inside a router are relative to its mount point (see space/app.ts). The routes in `routes/` are the
+  **space app**, one per space: its space host (`space/host.ts`) has already authorized the request against the
+  directory and rewritten `/api/s/<spaceId>/…` to `/api/…`, and hands over the identity as bindings (never
+  cookies or headers). Use `currentUser(c)` from `space/context.ts` (a `SpaceActor { id, display_name }`; `id` is
+  also the user's row in the space's users mirror) and `currentIdentity(c)` for the role. Middleware order in
+  space/app.ts: the gate (`space/gate.ts`) → security headers → `Cache-Control: no-store`. The gate judges the
+  route that will run (Hono's matched route, so any spelling of a path gets its rule): role, re-auth, import
+  status, size and daily write budget, and conditional reads (`ETag` / `If-None-Match` → 304, design §6.4.2).
+  It also reads a request's whole body (imports `IMPORT_BODY_LIMIT`, else `BODY_LIMIT`; 413 past it) and judges
+  the request again on its authorization as of then, so a member removed or demoted, or a session ended, while a
+  body was on its way writes nothing (design Appendix D 27); routes read the buffered body as before.
+  **Every new route needs a `GATE_RULES` entry**; a route without one answers 500
+  (`server/test/space/gate.test.ts` lists them all). CSRF and `Content-Length` checks are the gateway's.
 - **Validation**: `await readJson(c, schema)`, `readQuery(c, schema)`, `readId(c, 'id')` from `http/validate.ts`
   with the zod schemas in `shared/src/schemas.ts` / `board.ts` / `export.ts`. Never trust unvalidated input.
+  Validation is bounded (design Appendix D 44): a 400 lists the first 20 problems and counts the rest, and a body
+  of more than 5,000 list items and object members (`DESCRIBED_VALUES`) that fails is refused as "Invalid input
+  (too many values to list its problems)" without its problems (`shared/src/bounded.ts#parseBounded`, which walks
+  such a value along its schema and stops at the first part that fails; zod's `validate()` does not stop at items
+  that fail a check). Never call `safeParse` or `validate()` on a large untrusted value yourself: an imported
+  board's config, for one, is read with `parseBoardConfigLenient`, which bounds every part it parses and the work
+  of its repairs.
+- **Directory writes** (`directory/routes/`): read the body first, then `freshSession(c, ctx)` (the session and
+  account read again, 401 when revoked meanwhile) and the rows you check (membership, role), and write without
+  another await in between; after any later await (a hash, `spaces.init`) read again (design §5, Appendix D 21).
+  A sign-in's password check holds only while the account's `auth_epoch` is unchanged (every credential change
+  bumps it); otherwise it fails like a wrong password.
 - **Errors**: throw `badRequest(msg, details?)`, `notFound('Task')`, `conflict(msg)`, `forbidden()` from
   `http/errors.ts`. The error handler renders `{ error: { code, message, details? } }`. For a field-specific
   400 use `badRequest('Due date must be on or after start date', [{ path: 'dueDate', message: '...' }])`.
 - **Status codes**: 200 OK (GET/PATCH/DELETE/actions), 201 for creates (POST that creates a resource), body = DTO.
   Deletes return `{ ok: true }`.
-- **Database** (`db/index.ts`): `db.all<T>(sql, params)`, `db.get<T>`, `db.run` → `{changes, lastInsertRowid}`,
-  `db.tx(() => {...})` (synchronous only; nests with savepoints), `db.backupTo(file)` (VACUUM INTO; not inside
-  tx). Named params use `:name` in SQL with a plain object. **A named param missing from the object throws;
-  extra keys are ignored**; explicit `undefined` binds NULL; booleans bind 0/1. Rows are snake_case; map to
+- **Database** (`Db`, `core/db.ts`; on Node `NodeDb`, `runtime/node/nodeDb.ts`): `db.all<T>(sql, params)`, `db.get<T>`, `db.run` → `{changes, lastInsertRowid}`,
+  `db.tx(() => {...})` (synchronous only; nests with savepoints); Node-only code (`runtime/node`) also has
+  `NodeDb#backupTo(file)` (VACUUM INTO; not inside tx). Named params use `:name` in SQL with a plain object. **A named param missing from the object throws;
+  extra keys are ignored**; explicit `undefined` binds NULL; booleans bind 0/1. One statement per `all`/`get`/`run`
+  (`db.exec` runs several, without params). Rows are snake_case; map to
   camelCase DTOs in services/mappers.ts. Every multi-statement mutation runs inside `db.tx`.
   `PRAGMA foreign_keys=ON` (cascades are relied upon). Ids are AUTOINCREMENT (never reused).
 - **Timestamps**: `new Date().toISOString()` (always this exact format — SQL compares them as strings).
@@ -148,10 +254,26 @@ make the smallest possible fix, keep exported signatures backwards compatible, a
   activity (§5.8) in the same transaction, via `services/activity.ts`.
 - **SQL injection**: never interpolate values into SQL; only interpolate trusted fragments you built
   (column names from a fixed whitelist, placeholders).
-- Case-insensitive text matching uses the registered SQL function `lyren_lower(x)` (JS `toLowerCase()`,
-  Unicode-aware) so SQL agrees with `shared/src/filter.ts`. The ref is per row:
-  `instr(lyren_lower(t.title || char(10) || t.description || char(10) || p.key || '-' || t.number), :tok0) > 0`
-  (one parameter per token). If you use LIKE anywhere, escape `%`, `_` and `\` and add `ESCAPE '\'`.
+- Case-insensitive text matching uses **fold columns** (design §3.4): `projects.name|description`,
+  `milestones.name|description`, `epics.name|description`, `tasks.title|description`, `tags.name` and
+  `statuses.name` each have a `*_fold` column holding `fold(value)` (`core/fold.ts`, JS `toLowerCase()`), and every
+  statement that writes the column writes its fold in the same statement (the columns are NOT NULL without a
+  default, so a forgotten one fails). Search tokens (already folded by `searchTokens`) travel as ONE JSON
+  parameter: `NOT EXISTS (SELECT 1 FROM json_each(:tokens) tk WHERE instr(p.name_fold || char(10) ||
+  p.description_fold, tk.value) = 0)` (`allTokensSql` / `tokenHitsSql` in services/tasks.ts; a task's title,
+  description and ref are checked one by one, the ref last), so no statement grows with the input. Tag and status
+  names are unique by `name_fold`. There is no `lyren_lower()` (a Durable Object cannot register functions) and no
+  `LIKE` on user input.
+- **Rows read** (on Cloudflare every row a statement reads is billed, design §11.2, Appendix D 42): task queries
+  use `TASK_FROM` (`tasks t` alone) and reach a task's project, status and epic through `IN (SELECT … FROM <small
+  table>)`, not joins; task lists select `TASK_COLUMNS` (the row alone) and hydrate with `hydrateTasks`, which
+  looks the projects, epics and tags up by id (`byJsonIds`); a task's tags are `tasks.tag_ids` (a JSON array that
+  triggers keep from `task_tags`: write `task_tags`, never `tag_ids`), and its comment count and logged minutes
+  `tasks.comment_count` and `tasks.worklog_minutes` (triggers keep them from `comments` and `work_logs`; never
+  write them). A page (`limit` ≤ `TASK_PAGE_MAX`, 500) reads the ids of every match in order, then its own rows by
+  id (Appendix D 47). Statistics and the dashboard read the tasks once and aggregate in JS, with
+  `compareText` and `RealSum` (services/sql.ts) where they replace SQL's text order and `SUM()`.
+  `server/test-workers/cost.test.ts` holds the budget; `docs/cloudflare.md` has the numbers.
 - Pass id lists as one JSON parameter: `WHERE id IN (SELECT value FROM json_each(:ids))` with
   `{ ids: JSON.stringify(ids) }` (keeps SQL text constant). `IN` never matches NULL: when a filter array
   contains `null`, strip it from the JSON and OR in `col IS NULL`. Deduplicate id arrays first.
@@ -161,8 +283,12 @@ make the smallest possible fix, keep exported signatures backwards compatible, a
   `path.resolve`/`path.join`; never create two names differing only in case; directory links as junctions
   on win32; no graceful-signal assertions on win32 (child.kill() is TerminateProcess).
 - Tests: `server/test/<area>.test.ts` with `createTestContext(overrides?)` from `server/test/helpers.ts`
-  (in-memory DB; `ctx.signedIn()` returns a client that sends cookie + CSRF header; `ctx.config.dataDir` is a
-  temp dir). Run with `npx vitest run server/test/<file>`.
+  (the whole Node stack on in-memory databases, design §14.3; `ctx.signedIn()` sets up the owner,
+  owner@example.com, and returns a client that sends its cookies and the CSRF header and rewrites unprefixed
+  space paths, `/api/tasks` to `/api/s/<ctx.spaceId>/tasks`; `ctx.addUser()` adds a member; `ctx.db` is that
+  space's database and `ctx.directoryDb` the directory's; `ctx.config.dataDir` is a temp dir, removed after
+  the test, when every space's fold columns are checked). The directory or a space alone:
+  `server/test/support/{directoryHarness,spaceHarness}.ts`. Run with `npx vitest run server/test/<file>`.
 
 ## 5. Domain rules
 
@@ -252,11 +378,15 @@ make the smallest possible fix, keep exported signatures backwards compatible, a
   Bulk `epicId` must belong to each task's project (400 listing offenders); bulk never moves projects.
 
 ### 5.6 Comments & work logs
-- Comments: body trimmed, 1–50 000 chars, Markdown. Only the author may edit/delete (403 otherwise).
-  Editing sets `edited_at`. Work logs: `date` required, `minutes` (int ≥ 0, nullable) and/or `note`;
-  at least one of minutes>0 or a non-empty note — on create and on the MERGED row for updates (400, path
-  `note`). Author-only edits/deletes.
-- TaskDTO.commentCount and worklogMinutes are aggregates over existing rows.
+- Comments: body trimmed, 1–50 000 chars, Markdown. Only the author may edit (403 otherwise); the author, or
+  an admin or owner of the space, may delete (design §6.5). Rows of a deleted account or of a placeholder can
+  be edited by nobody. Editing sets `edited_at`. Work logs: `date` required, `minutes` (int ≥ 0, nullable)
+  and/or `note`; at least one of minutes>0 or a non-empty note — on create and on the MERGED row for updates
+  (400, path `note`). The same author and moderation rules as comments.
+- Comment, work-log and activity DTOs carry `importedBy`/`importedAt` (import provenance, design §8.6; null for
+  rows written in the space).
+- TaskDTO.commentCount and worklogMinutes are aggregates over existing rows (kept in the task's row by triggers,
+  space migration 3).
 
 ### 5.7 Tags
 - Name unique case-insensitive (duplicate → 409). Default color `DEFAULT_TAG_COLOR`.
@@ -283,33 +413,100 @@ listed in `ActivityAction` (shared/src/types.ts). `data` follows `ActivityData`:
   doesn't match the `ActivityData` shape, and malformed `changes` entries, are dropped, so clients can rely on it.
 
 ### 5.9 Settings
-Stored per key as JSON in `settings`; `GET /api/settings` returns `DEFAULT_SETTINGS` merged with stored values.
-Keys starting with `_` are internal (never exported/overwritten by import). `defaultBoardId` must reference an
-existing board (or null). Deleting that board (directly or via project cascade) resets it to null.
-Theme is a per-device preference (localStorage), not a server setting.
+Split (design §3.6): each space stores its `SpaceSettings` (`estimateUnit`, `defaultBoardId`) per key as JSON
+in its `settings` table; `GET /api/settings` returns `DEFAULT_SPACE_SETTINGS` merged with stored values (other
+keys, `weekStartsOn` and `homePage` included, are ignored, and PATCH strips them). Each account's
+`UserPreferences` (`weekStartsOn`, `homePage`) are `PATCH /api/account/preferences` in the directory; server
+code that needs `weekStartsOn` takes it from the request (`POST /api/tasks/query` body, `GET /api/dashboard?weekStartsOn=`),
+default 1. Keys starting with `_` are internal (never exported/overwritten by import). `defaultBoardId` must
+reference an existing board (or null). Deleting that board (directly or via project cascade) resets it to null.
+Theme is a per-device preference (localStorage), not a server setting. The web client edits the preferences
+(and the theme) in Account settings → Preferences (`/settings/preferences`), a space's settings in its
+Settings → General (`/s/:spaceId/settings`).
 
-### 5.10 Import (`POST /api/data/import`)
-Validate with `exportSchema` (shared/src/export.ts) — 400 with details on any failure, nothing changed. Then
-check referential integrity (400 listing problems): unique ids per table, unique project keys / tag names /
-status names (case-insensitive); milestone/epic/task `projectId` exist; epic `milestoneId` in the same
-project; task `statusId` exists; task `epicId` in the same project; task `tagIds` exist; comment/worklog
-`taskId` exist; activity `taskId`/`projectId` exist or are null (drop entries that dangle);
-`settings.defaultBoardId` exists else becomes null; board `projectId` exists or null. Also the value rules
-later edits re-check on the merged row: `startDate <= dueDate` for tasks/milestones/epics (path `<table>.<i>.dueDate`)
-and work logs with minutes>0 or a non-blank note (path `worklogs.<i>.note`). The schema caps ids, task numbers,
-`taskCounter` and positions at `IMPORT_INT_MAX` (2^40, far from the 2^53 node:sqlite can read back), and activity
-`data` must match `ActivityData` (§5.8; extra keys allowed). Before replacing, write
-a safety snapshot with `db.backupTo(DATA_DIR/backups/pre-import-<timestamp>.db)` (a `-<n>` suffix keeps names
-unique), then delete the oldest pre-import snapshots beyond `SNAPSHOT_KEEP` (never the new one; §12). Then in
-ONE `db.tx`: delete all domain rows (activity, comments, work_logs, task_tags, tasks, epics, milestones, boards,
-projects, tags, statuses, non-internal settings), insert everything with the ORIGINAL ids, map every user reference
-(authorId/actorId/createdBy) to the importing user (comment/worklog `authorId` null too, so they stay
-editable by their author), set `task_counter = max(taskCounter, max(number))`,
-regenerate task ranks preserving the exported order (rank, id), recompute `completedAt` consistency from
-status categories (closed without completedAt → now; open → NULL), parse board configs leniently and force
-project boards' `filter.projectIds = [projectId]`, reset any AUTOINCREMENT counter above `IMPORT_INT_MAX` (left by
-an older import) to the table's max id; finally `PRAGMA foreign_key_check` must be empty.
-Users and sessions are never touched. Returns `{ ok, counts, backupFile }`.
+### 5.10 Export and import (archive v2; design §8)
+**Export** (`GET /api/s/:spaceId/data/export`, owners, re-auth): the space's **archive**, format
+`lyren-plan-space` version 2 (`shared/src/archive.ts`, `SpaceArchiveDTO`), gzip-compressed, attachment
+`lyren-space-<slug>-<YYYY-MM-DD>.json.gz` (`archiveFileName`: the space's name lower-cased, runs outside `[a-z0-9]`
+one `-`, at most 40 characters, `space` when empty; the server's UTC date). Every row has its v1 shape with its
+original id, in id order (statuses and boards in their v1 order); the derived columns (`tag_ids`, `comment_count`,
+`worklog_minutes`), the fold columns, `_meta` and the `_` settings are left out. User references (`createdBy`,
+`authorId`, `actorId`, and `importedBy` of the comments, work logs and activity an import attributed, which also
+carry `importedAt`) are null or ids of `users`: the mirror rows rows reference plus the exporter, positive for
+accounts, negative for placeholders, with the address of live accounts only. `settings` holds the space's settings.
+The archive is written on one read view of the space (a read transaction of its own on Node), in keyset pages of
+1,000 rows, compressed as it goes. `HEAD` answers with the headers only.
+
+**Import** into a **new space** (`POST /api/spaces` `{ name, forImport: true }` makes it `importing`, the importer
+its only owner) or over **this space** (owner, re-auth, typed confirmation in the web): `POST
+…/data/import/analyze?mode=new|replace` then `POST …/data/import/commit?mode=new|replace`, each with the file as the
+multipart field `file` (gzip, told by its magic bytes `1f 8b`, or plain JSON; v2 archives and v1 exports
+`lyren-plan-export`/1); the commit also sends `mapping` (JSON `ImportMappingInput`: a target for every user rows
+reference, an account among the analysis's candidates or `{ kind: 'placeholder' }`, and `skipActivity`). The gate
+checks the mode against the space's status (`mode=new` needs `importing`, else 409 "This space has already been
+imported"; `replace` needs `active`). One import runs at a time on Node (503 "Another import is running. Try
+again in a minute.") and in each space on Cloudflare (503 "Another import into this space is running. Try again in
+a minute."). Every analyze and commit counts on `im:<userId>` as it starts, whatever it answers, 10 an hour (429
+"You have started too many imports in the last hour. Try again in about <n> minutes.", with `Retry-After`).
+Reading: the unpacked bytes count against `IMPORT_BODY_LIMIT` (413 "The archive is larger
+than <n> MB unpacked"), the text must be UTF-8, the JSON values (`{`, `[`, `,` outside strings) are counted before
+parsing (413 "The archive has more entries than this instance accepts." past `IMPORT_MAX_JSON_VALUES`; 400 for a
+nesting deeper than 64), then JSON, the format ("This is not a Lyren Plan export file") and its version
+("Unsupported export format version <v>", <v> named only when it is a number or a string of at most 20 characters;
+detail "Only versions 1 and 2 are supported"). A refusal never repeats the file: a problem names at most 10 unknown
+tag ids ("<ids> and <n> more"), and every detail's path and message is clipped to 300 characters. Validation: the frame,
+then each row through `parseBounded` (`exportRowSchemas`, `archiveRowSchemas`, `archiveUserSchema`), stopping after
+50 problems — 400 listing them, nothing changed. Then referential integrity (400 listing the first 50 of all
+problems): unique ids per table, unique project keys / tag names / status names (case-insensitive); milestone/epic/
+task `projectId` exist; epic `milestoneId` in the same project; task `statusId` exists; task `epicId` in the same
+project; task `tagIds` exist; comment/worklog `taskId` exist; activity `taskId`/`projectId` exist or are null (drop
+entries that dangle); `settings.defaultBoardId` exists else becomes null; board `projectId` exists or null;
+`startDate <= dueDate` for tasks/milestones/epics (path `<table>.<i>.dueDate`) and work logs with minutes>0 or a
+non-blank note (path `worklogs.<i>.note`); for v2 also `users` ids unique, a placeholder's id negative and an
+account's positive, every user reference (path e.g. `tasks.12.createdBy`) and `space.exportedBy` one of `users`. The
+schema caps ids, task numbers, `taskCounter` and positions at `IMPORT_INT_MAX` (2^40), and activity `data` must match
+`ActivityData` (§5.8; extra keys allowed), at most 262,144 characters as JSON (`ACTIVITY_DATA_MAX_CHARS`). An invalid
+address in `users` counts as none.
+
+Analyze (`ImportAnalysisDTO`, stateless) lists the counts, the users rows reference (with how many rows of each
+kind), the **candidates** (the importer and every active account that shares an active space with them; for an
+instance admin every active account, at most 1,000; nobody else is ever matched or named), a suggestion per user
+(the candidate with its address, else the importer when only one user is referenced or for the exporter, else a
+placeholder) and the estimate (rows written, without the activity, `IMPORT_MAX_ROW_WRITES`, what is left of today's
+`IMPORT_DAILY_ROW_WRITES`). Commit: the mapping is checked against the candidates asked for again (400
+`validation_error` at `mapping`: every referenced user exactly once, a `user` target a candidate; v1 ignores it),
+the estimate against `IMPORT_MAX_ROW_WRITES` (409 `quota_exceeded` "This import needs about <n> row writes; this
+instance allows <m> per import."), the instance's daily budget is reserved (429 "This instance has reached today's
+import limit. It resets at 00:00 UTC."), for a replace
+the safety point is taken (`Deps.space.safety.beforeReplace()`; on Node a snapshot
+`backups/spaces/<id>/pre-import-<timestamp>.db` next to the directory file, the oldest beyond `SNAPSHOT_KEEP`
+deleted, §12, with the command that undoes the import, `restore "<path>"`; on Cloudflare none), then in ONE `db.tx`:
+delete all domain rows (the tasks first) and the space's settings, and the mirror's rows of non-members and
+placeholders; upsert the accounts users are mapped to (members stay members) and create a placeholder per user mapped
+to one (its archive name, ids below 0); insert everything with the ORIGINAL ids, references through the mapping (v1:
+every non-null reference, and every comment/work-log author, to the importer), comments, work logs and activity of
+someone other than the importer with `imported_by` (the importer) and `imported_at` (now); an archive's own
+provenance is kept only when its `importedBy` maps to the importer (the importer's own earlier import), as the
+importer is the one person an import can vouch for; `task_counter = max(taskCounter, max(number))`, the fold
+columns, task ranks generated in the exported (rank, id) order, the tasks' tag lists, comment counts and logged
+minutes, activity `data` with the file's key order, `completedAt` consistency (closed without completedAt → now;
+open → NULL), board configs read leniently with project boards forced to their project (the repairs of one
+import's boards bounded together, 5,000 custom columns; a config over 262,144 characters of JSON gets the
+defaults), any AUTOINCREMENT counter above `IMPORT_INT_MAX` reset to the table's max id; `PRAGMA
+foreign_key_check` must be empty; `_meta.imported_at` and the result. A failed commit gives its reservation back,
+less the rows its rolled-back transaction was billed for (the space's meter, on Cloudflare). The directory then activates a new
+space and records the mapped accounts with the space (their later profile changes and deletion reach its mirror).
+Returns `ImportResultDTO` `{ ok, counts, safety, nonMemberAuthors }`. A `mode=new` commit on a space already filled
+(the directory call failed afterwards) writes nothing again and answers the stored result. The rows an import writes
+are not counted in the space's daily write budget. An `importing` space can be deleted by its owner at once
+(`{ confirmName: '' }`), and maintenance purges one older than 24 hours.
+
+**People** (§8.6): `POST …/people/:personId/reassign` `{ toUserId }` (admins and owners) moves the tasks, comments,
+work logs and activity of a placeholder or a former member to a member (the moved comments, work logs and
+activity get `imported_by` = the admin and `imported_at` = now, also those an import had labelled: the reassignment
+is the attribution now; a placeholder's row goes); `POST …/people/me/disown` (anyone) moves the imported rows
+attributed to the caller to the space's placeholder "Unknown (imported)" (made by the first disown, shared by the
+later ones). Neither records activity.
 
 ### 5.11 Board references
 Board configs store entity ids in JSON (no FKs). `services/boardRefs.ts#rewriteBoardRefs(db, kind, fromId,
@@ -324,31 +521,36 @@ them as "(deleted)") but remove them from drop patches and group prefs. Clients 
 
 `server/src/services/`:
 
-- `rows.ts` — row interfaces for every table (`ProjectRow`, `MilestoneRow`, `EpicRow`, `StatusRow`, `TagRow`,
-  `TaskRow`, `CommentRow`, `WorklogRow`, `ActivityRow`, `BoardRow`).
+- `rows.ts` — row interfaces for every table of a space (`MirrorUserRow`, `ProjectRow`, `MilestoneRow`, `EpicRow`,
+  `StatusRow`, `TagRow`, `TaskRow`, `CommentRow`, `WorklogRow`, `ActivityRow`, `BoardRow`), fold columns,
+  `tasks.tag_ids`, `tasks.comment_count` and `tasks.worklog_minutes` included.
 - `mappers.ts` — row → DTO (`toProjectDTO(row, stats)`, `toMilestoneDTO`, `toEpicDTO`, `toStatusDTO`,
-  `toTagDTO`, `toBoardDTO` (config via `parseBoardConfigLenient`), `toCommentDTO`, `toWorklogDTO`).
-- `stats.ts` — batched aggregate queries: project stats (needs `today`), milestone & epic progress,
-  status/tag task counts. No N+1 queries. Progress (tasksTotal/tasksClosed/estimates) counts non-archived
+  `toTagDTO`, `toBoardDTO` (config via `parseBoardConfigLenient`), `toCommentDTO`, `toWorklogDTO`, `toPersonDTO`).
+- `stats.ts` — project stats (needs `today`), milestone & epic progress, status/tag task counts: each one scan of
+  the tasks in its scope, aggregated in JS; `spaceStats(db, today)` all of them from one scan (bootstrap). No N+1
+  queries. Progress (tasksTotal/tasksClosed/estimates) counts non-archived
   tasks plus archived **closed** tasks, so archiving finished work never moves progress backwards; archived
   open tasks count nowhere (not in tasksOpen/tasksOverdue either). Tag counts exclude archived tasks; status
   counts include them.
 - `entities.ts` — `listProjects/getProject(DTO)`, `listMilestones(projectId?)/getMilestone`,
-  `listEpics(projectId?)/getEpic`, `listStatuses`, `listTags`, `listBoards/getBoard`;
+  `listEpics(projectId?)/getEpic`, `listStatuses`, `listTags` (each list optionally takes its statistics
+  precomputed, as bootstrap passes `spaceStats`'), `listBoards/getBoard`, `listPeople` (the mirror);
   `requireProject/requireMilestone/requireEpic/requireStatus/requireTask/requireBoard` (row or 404);
   `requireTagIds(ids)` (400 listing unknown ids); `defaultStatusId()`; `generateProjectKey(name)`;
   `nextPosition(table, scope?)`; `assertExactIdSet(ids, expected)` (400 for reorder mismatches).
-- `tasks.ts` — `hydrateTasks(db, rows)` → TaskDTO[] (batched tags / counts / worklog sums / milestone / ref),
+- `tasks.ts` — `hydrateTasks(db, rows)` → TaskDTO[] (batched milestone / ref / tag names from `tag_ids`; the
+  counts from the row),
   `getTaskDTO(db, id)`, `queryTasks(db, input, { nowMs?, today?, weekStartsOn? })` → `TaskQueryResult`,
   `buildTaskWhere(filter, ctx)` → `{ sql, params }` (exact SQL equivalent of `matchesTaskFilter`),
   `taskOrderBy(sort)` (equivalent of `compareTasks`), `findTaskByRef(db, ref)`.
 - `rank.ts` — `rankForPosition(db, position, movingTaskId?)`, `renormalizeRanks(db)` (§5.5).
 - `activity.ts` — `recordActivity(db, entry)`, diff helpers to build `FieldChange[]`,
   `listActivity(db, query)` → `ActivityPage`, `hydrateActivity(db, rows)`, `taskActivity(db, taskId)`.
-- `settings.ts` — `getSettings(db)`, `saveSettings(db, patch)`.
+- `settings.ts` — `getSettings(db)` → `SpaceSettings`, `saveSettings(db, patch)`.
 - `boardRefs.ts` — `rewriteBoardRefs(db, kind, fromId, toId)` (§5.11).
 - `routes/bootstrap.ts` — `GET /api/bootstrap` → `BootstrapDTO` (accepts `?today=`).
-- `db/seed.ts#createSampleData(db, userId)` — §11.
+- `db/seed.ts#ensureDefaults(db)` and `createSampleData(db, userId)` (§11; `userId` is the space owner's mirror row),
+  run by `space/init.ts#initSpaceDb` when a space is created.
 
 ---------------------------------------------------------------------------------------------------------
 
@@ -356,20 +558,50 @@ them as "(deleted)") but remove them from drop patches and group prefs. Clients 
 
 All bodies are JSON. All mutating requests carry header `X-Lyren-Request: 1` (web/src/api/client.ts does).
 Types: inputs in `shared/src/schemas.ts` / `board.ts` / `export.ts`, outputs in `shared/src/types.ts`.
-Every reorder endpoint requires the exact full id set of its scope (400 otherwise).
+Every reorder endpoint requires the exact full id set of its scope (400 otherwise). The account, space and
+admin endpoints are the directory's (server/src/directory/); their rules per endpoint (re-auth, roles, limits)
+are in docs/design/multi-user-and-cloudflare.md §7.2.
 
 | Method & path | Input | Output |
 |---|---|---|
 | GET `/api/health` | – | `{ ok, version }` |
 | GET `/api/auth/status` | – | `AuthStatusDTO` |
-| POST `/api/auth/setup` | `SetupInput` (incl. `setupCode`) | 201 `{ user }` + cookie |
-| POST `/api/auth/login` | `LoginInput` | `{ user }` + cookie |
+| POST `/api/auth/setup` | `SetupInput` (an email; incl. `setupCode`) | 201 `{ user }` + cookies |
+| POST `/api/auth/login` | `LoginInput` (`identifier`: an email or a legacy username) | `{ user }` + cookies |
 | POST `/api/auth/logout` | – | `{ ok }` |
-| GET/PATCH `/api/auth/me` | `UpdateMeInput` | `UserDTO` |
-| POST `/api/auth/password` | `ChangePasswordInput` | `{ ok }` (other sessions revoked) |
-| GET `/api/auth/sessions` | – | `SessionDTO[]` |
-| DELETE `/api/auth/sessions/:id` · POST `/api/auth/sessions/revoke-others` | – | `{ ok }` |
-| GET `/api/bootstrap?today=` | – | `BootstrapDTO` |
+| GET/PATCH `/api/account` · PATCH `/api/account/preferences` | `UpdateAccountInput` · `PreferencesUpdateInput` | `UserDTO` · `UserPreferences` |
+| POST `/api/account/password` · POST `/api/account/reauth/password` | `ChangePasswordInput` · `ReauthPasswordInput` | `{ ok }` (other sessions revoked) · `ReauthDTO` `{ ok, reauthUntil }` |
+| DELETE `/api/account/password` | – (re-auth) | `{ ok }`; 409 `last_credential` with the reason without a passkey that works here or a way back in (a verified address with mail, an admin who may make a reset link, or the Node command line), 409 `conflict` without a password |
+| POST `/api/auth/passkey/login/options` · POST `/api/auth/passkey/login` | `PasskeyLoginOptionsInput` · `CeremonyResponseInput` | `CeremonyDTO` (a signed ceremony; nothing stored) · `{ user }` + cookies; 400 `passkey_error` (details `credential: unknown` for a passkey the instance does not know whose user handle is an account's here: removed since), not held back by the password limits |
+| GET `/api/account/passkeys` · POST `/api/account/passkeys/options` · POST `/api/account/passkeys` | – · – (re-auth; fewer than 20) · `PasskeyRegisterInput` | `PasskeyDTO[]` · `CeremonyDTO` · 201 `PasskeyDTO` (409 `quota_exceeded` at 20) |
+| PATCH/DELETE `/api/account/passkeys/:passkeyId` | `PasskeyRenameInput` · – (re-auth) | `PasskeyDTO` · `PasskeyRemovedDTO` `{ ok, acceptedCredentialIds, userHandle }` (409 `last_credential` for the last usable credential) |
+| POST `/api/account/reauth/passkey/options` · POST `/api/account/reauth/passkey` | – · `CeremonyResponseInput` | `CeremonyDTO` (the account's passkeys that work here) · `ReauthDTO` |
+| GET `/api/account/sessions` · DELETE `/api/account/sessions/:sessionId` · POST `/api/account/sessions/revoke-others` | – | `SessionDTO[]` · `{ ok }` · `{ ok, revoked }` |
+| GET `/api/account/security-events?before=` · POST `/api/account/notices/seen` · DELETE `/api/account` | – · – · `AccountDeleteInput` | `SecurityEventDTO[]` (no address or agent on events an admin or the operator caused) · `{ ok }` · `{ ok }` |
+| GET/POST `/api/spaces` · GET `/api/spaces/deleted` · GET/PATCH/DELETE `/api/spaces/:spaceId` · POST `…/restore` | – / `SpaceCreateInput` · – · – / `SpaceUpdateInput` / `SpaceDeleteInput` · – | `SpaceSummaryDTO[]` / 201 `SpaceSummaryDTO` · `DeletedSpaceDTO[]` · `SpaceDetailDTO` / `SpaceSummaryDTO` / `{ ok, purgeAfter }` · `SpaceSummaryDTO` |
+| GET `/api/spaces/:spaceId/members` · PATCH/DELETE `…/members/:userId` · POST `…/leave` · POST `…/transfer` | `MemberRoleInput` · `TransferInput` | `MemberDTO[]` · `MemberDTO` · `{ ok }` |
+| POST `/api/auth/signup` · `/api/auth/signup/inspect` · `/api/auth/signup/complete` | `SignupInput` · `TokenInput` · `SignupCompleteInput` | 202 `{ ok }` whatever the address (policy `open`, else 403 `signup_disabled`) · `SignupPreviewDTO` · 201 `{ user }` + cookies |
+| POST `/api/auth/signup/passkey/options` · `/api/auth/signup/passkey/complete` | `SignupPasskeyOptionsInput` · `SignupPasskeyCompleteInput` | `CeremonyDTO` (the link is not used up) · 201 `{ user }` + cookies (the account has the passkey and no password) |
+| POST `/api/auth/password/forgot` · `/api/auth/password/reset/inspect` · `/api/auth/password/reset` | `ForgotPasswordInput` · `TokenInput` · `ResetPasswordInput` | 202 `{ ok }` whatever the address · `PasswordResetPreviewDTO` (`canUsePasskey`, `passkeyKeepsPassword`) · `{ ok }` (signed out everywhere, no sign-in) |
+| POST `/api/auth/password/reset/passkey/options` · `/api/auth/password/reset/passkey` | `TokenInput` · `ResetPasskeyInput` | `CeremonyDTO` · `PasskeyResetDTO` `{ ok, passwordRemoved, passwordKept }` (a passkey added instead of a password, which it replaces unless the account would then have no way back in, the reason in `passwordKept`: signed out everywhere, the `passkey_added` notice by mail) |
+| POST `/api/auth/email/confirm` | `TokenInput` | `EmailConfirmedDTO`; a verification or email-change link only in a session of the token's account (401 signed out, naming the account; 403 another account; nothing consumed) |
+| POST `/api/auth/recover` | `RecoverInput` | `RecoveryLinkDTO` (404 while `RECOVERY_TOKEN` is unset) |
+| POST `/api/account/email` · POST `/api/account/email/verify` | `EmailChangeInput` (re-auth) · – | `EmailChangeDTO` (202 pending with mail; 200 at once without) · 202 `{ ok }` (409 `mail_not_configured` without mail) |
+| GET/POST `/api/spaces/:spaceId/invitations` · POST `…/:invitationId/resend` · DELETE `…/:invitationId` | – / `InvitationCreateInput` · – · – | `InvitationDTO[]` / 201 `InvitationCreatedDTO` (503 when the mail could not be sent) · `InvitationCreatedDTO` · `{ ok }` |
+| POST `/api/invitations/inspect` · POST `/api/invitations/accept` (both work signed out) | `TokenInput` · `InvitationAcceptInput` | `InvitationPreviewDTO` · `InvitationAcceptedDTO` (201 + cookies for a new account) |
+| POST `/api/invitations/accept/passkey/options` · POST `/api/invitations/accept/passkey` (signed out) | `InvitationPasskeyOptionsInput` · `InvitationPasskeyAcceptInput` | `CeremonyDTO` · 201 `{ user, spaceId }` + cookies (a new account with the passkey and no password) |
+| GET `/api/invitations` · POST `/api/invitations/:invitationId/accept` · `…/decline` | – | `PendingInvitationDTO[]` (with mail, for a verified address) · `{ ok, spaceId }` · `{ ok }` |
+| GET `/api/admin/overview` | – | `AdminOverviewDTO`: the instance, its configuration (no secret), counts, warnings (`orphanedPasskeyAccounts`: the accounts left with passkeys that do not work here) and the last 20 administrative events (`AdminEventDTO`: actor and target) of every admin, the command line and the recovery token |
+| PATCH `/api/admin/settings` | `AdminSettingsInput` (re-auth) | `InstanceInfoDTO` (409 `mail_not_configured` for `open` while sign-up links cannot be mailed: no transport that delivers mail, and no `MAIL_LOG_BODIES`) |
+| GET `/api/admin/users?q&orphaned&cursor&limit` · GET `/api/admin/users/:userId` | `AdminUsersQuery` | `Page<AdminUserDTO>` (newest first; `q` in the address, username or name; `orphaned=1` only the active accounts without a password none of whose passkeys works here; `usablePasskeys` beside `passkeys`) · `AdminUserDetailDTO` (its spaces, its last 50 security events) |
+| PATCH/DELETE `/api/admin/users/:userId` | `AdminUserUpdateInput` (re-auth) · – (re-auth) | `AdminUserDTO` · `{ ok }` (never one's own account, 403; the last active admin stays one, 409 `last_admin`; DELETE as design §5.8.17, 409 `last_owner`). Disabling ends the account's sessions and device tokens, revokes its open invitations and tells its spaces before it answers; demoting revokes the instance invitations it sent |
+| POST `/api/admin/users/:userId/reset-link` | – | `ResetLinkDTO` (instance admins, re-auth; not for an admin's account, nor one demoted lately) |
+| GET/POST `/api/admin/invitations` · DELETE `…/:invitationId` | – / `AdminInvitationInput` (re-auth) · – (re-auth) | `InvitationDTO[]` / 201 `InvitationCreatedDTO` · `{ ok }` (instance invitations: an account, no space) |
+| GET `/api/admin/spaces?q&cursor&limit` · DELETE `/api/admin/spaces/:spaceId` · POST `…/restore` | `AdminSpacesQuery` · – (re-auth) · – (re-auth) | `Page<AdminSpaceDTO>` (every space, no content; `bytes` on Node only) · `{ ok, purgeAfter }` · `AdminSpaceDTO` (409 once the grace period is over, or when no member is left) |
+| GET/HEAD `/api/admin/backup` | – | a backup set (`application/x-tar`; instance admins, re-auth) |
+| POST `/api/admin/mail/test` | – | `MailTestDTO` `{ ok, messageId? }`: a test message to the admin's own address, sent at once (instance admins); 502 `unavailable` with the transport's error (never a secret), 409 for an account without an email address |
+| *Space endpoints, from here down to `/api/search`: served as `/api/s/:spaceId/<path after /api>` (design §7.3); the role each needs is the gate's (design §6.4), and reads answer `If-None-Match` with 304. Without a known session 401, for a space the account cannot open 404, whether or not the space exists. Unprefixed (`/api/bootstrap`, …) they are no space's: the directory answers them as any path it does not know, 401 signed out and 404 signed in, with the message "Lyren Plan has been updated. Reload the page to continue." for the tab of an old client* | | |
+| GET `/api/bootstrap?today=` | – | `BootstrapDTO` (`user`: `UserRef`; `space`: `SpaceInfoDTO` with the viewer's role; `people`: the mirror; `settings`: `SpaceSettings`) |
 | GET `/api/projects?today=` · GET `/api/projects/:id?today=` | – | `ProjectDTO[]` · `ProjectDTO` |
 | POST `/api/projects` · PATCH `/api/projects/:id` | `ProjectCreateInput` · `ProjectUpdateInput` | `ProjectDTO` |
 | DELETE `/api/projects/:id` | – | `{ ok }` |
@@ -390,25 +622,23 @@ Every reorder endpoint requires the exact full id set of its scope (400 otherwis
 | POST `/api/tasks/bulk` | `TaskBulkUpdateInput` | `{ tasks: TaskDTO[] }` |
 | POST `/api/tasks/bulk-delete` | `TaskBulkDeleteInput` | `{ deleted }` |
 | GET `/api/tasks/:id/timeline` | – | `TaskTimelineDTO` (each list oldest first) |
-| POST `/api/tasks/:id/comments` · PATCH/DELETE `/api/comments/:id` | `CommentCreateInput` | `CommentDTO` |
-| POST `/api/tasks/:id/worklogs` · PATCH/DELETE `/api/worklogs/:id` | `WorklogCreateInput` · `WorklogUpdateInput` | `WorklogDTO` |
-| GET `/api/worklogs?from&to&projectId&today` | `WorklogReportQuery` (default [today-29, today]) | `WorklogReportDTO` |
+| POST `/api/tasks/:id/comments` · PATCH/DELETE `/api/comments/:id` | `CommentCreateInput` | `CommentDTO` (DELETE: the author, an admin or an owner) |
+| POST `/api/tasks/:id/worklogs` · PATCH/DELETE `/api/worklogs/:id` | `WorklogCreateInput` · `WorklogUpdateInput` | `WorklogDTO` (DELETE: the author, an admin or an owner) |
+| GET `/api/worklogs?from&to&projectId&today&userId` | `WorklogReportQuery` (default [today-29, today]; `userId`: only that user's) | `WorklogReportDTO` |
 | GET `/api/activity?projectId&taskId&before&limit` | `ActivityQueryInput` | `ActivityPage` |
 | GET/POST `/api/boards` · GET/PATCH/DELETE `/api/boards/:id` | `BoardCreateInput` · `BoardUpdateInput` | `BoardDTO` |
 | POST `/api/boards/:id/duplicate` · POST `/api/boards/reorder` | – · `ReorderInput` (one scope: global or one project) | 201 `BoardDTO` · `{ ok }` |
 | GET/POST `/api/tags` · PATCH/DELETE `/api/tags/:id` · POST `/api/tags/:id/merge` | `TagCreateInput` · `TagUpdateInput` · `TagMergeInput` | `TagDTO` |
 | GET/POST `/api/statuses` · PATCH `/api/statuses/:id` · DELETE `/api/statuses/:id?reassignTo=` · POST `/api/statuses/reorder` | `StatusCreateInput` · `StatusUpdateInput` · `ReorderInput` | `StatusDTO` |
-| GET/PATCH `/api/settings` | `SettingsUpdateInput` | `Settings` |
-| GET `/api/data/export` | – | `ExportDTO` (attachment `lyren-export-YYYY-MM-DD.json`) |
-| POST `/api/data/import` | `ExportDTO` | `{ ok, counts, backupFile }` (§5.10) |
-| GET `/api/data/backup` | – | SQLite snapshot (attachment `lyren-backup-YYYY-MM-DD.db`, see below) |
-| GET `/api/dashboard?today=` | – | `DashboardDTO` (lists capped at 50 / 20; `counts` = uncapped totals per list, `inProgressProjects` = distinct projects with started tasks) |
+| GET/PATCH `/api/settings` | `SpaceSettingsUpdateInput` | `SpaceSettings` (§5.9) |
+| GET/HEAD `/api/data/export` | – | the space's archive v2 (`application/gzip`, attachment `lyren-space-<slug>-YYYY-MM-DD.json.gz`, `SpaceArchiveDTO`; owner, re-auth; §5.10) |
+| POST `/api/data/import/analyze?mode=new\|replace` | multipart `file` | `ImportAnalysisDTO` (§5.10; owner, re-auth for `replace`; `new` only while the space is `importing`) |
+| POST `/api/data/import/commit?mode=new\|replace` | multipart `file`, `mapping` (JSON `ImportMappingInput`) | `ImportResultDTO` (§5.10; 409 `quota_exceeded` over `IMPORT_MAX_ROW_WRITES`, 429 past the day's import budget) |
+| POST `/api/people/:personId/reassign` · POST `/api/people/me/disown` | `PeopleReassignInput` · – | `PeopleReassignedDTO` (admins and owners) · `PeopleDisownedDTO` (anyone) |
+| GET `/api/dashboard?today=&weekStartsOn=` | – | `DashboardDTO` (lists capped at 50 / 20; `counts` = uncapped totals per list, `inProgressProjects` = distinct projects with started tasks; `worklog` = the viewer's own time) |
 | GET `/api/search?q&limit` | `SearchQueryInput` | `SearchResultDTO` (tasks of every project, archived tasks included and ranked after live ones at equal relevance) |
 
-Backup: `db.backupTo(path.join(config.dataDir, '.backup-<random>.db'))` → strip the `sessions` table from the
-copy → stream with `Content-Type: application/vnd.sqlite3` → always unlink the temp file. Never read the live
-database file (WAL mode). `HEAD` answers with the headers only and takes no snapshot (a body-less response
-would never close the stream).
+The instance backup is the directory's `GET /api/admin/backup` (design §9.5); the space app has no backup route.
 
 Boards: `projectId` is immutable (create only). For project boards the server forces
 `config.filter.projectIds = [projectId]` on create/update/duplicate. `GET /api/boards` returns all boards.
@@ -569,12 +799,53 @@ Draggable/sortable ids are `${laneKey}|${colKey}|${taskId}`; read the source key
 
 ## 9. Web conventions
 
-- **Data**: use the hooks in `web/src/api/*` (they define keys and invalidation). Read projects, milestones,
-  epics, statuses, tags, boards, settings and the user from `useLookups()` (bootstrap, memoized per payload) —
-  never refetch them per page. Mutations already invalidate the right caches; show `toast.error(err)` on failure.
-- **Navigation model**: ≥ md: collapsible left sidebar (Dashboard, Projects list, Boards list, Activity,
-  Work log, Settings; search + new-task buttons; user menu). < md: bottom bar (h-14 + safe area) with
-  Home (dashboard) · Projects · Boards · Search (palette) · More (sheet: Activity, Work log, Settings, theme,
+- **Spaces** (design §12.2–§12.4): every page of a space is under `/s/:spaceId/…` (`SpaceLayout`: the space
+  context from `AuthStatusDTO.spaces`, its bootstrap, the shell); `/spaces`, `/settings` (the account) and
+  `/admin` (instance admins) are outside any space (`DirectoryLayout`). `/` opens the last space used
+  (`lyren.lastSpace`), else the first, else `/spaces`. Links inside a space are built with `useSpacePath()`
+  (`sp('/projects/3')`) or `spaceLink(spaceId, path)` (app/space.ts), never written unprefixed
+  (`routeLiterals.test.ts` fails on one); the old paths (`/dashboard`, `/projects/…`, `/boards/…`,
+  `/tasks/…`, `/activity`, `/worklog`, `/settings/statuses|tags|data`) redirect to the same path, search
+  and hash in `AuthStatusDTO.legacySpaceId`'s space, else the last used one (app/legacyRedirect.ts), so
+  bookmarks and links in descriptions keep working. A space the account cannot open shows "Space not
+  found". Role-aware UI reads `useSpace().permissions` (`spacePermissions(role)`, shared/src/roles.ts) and the
+  decisions in app/permissions.ts (`entryActions`, `spaceSettingsSections`, `memberActions`, `leaveRefusal`).
+- **Spaces in the shell** (design §12.9): the sidebar's top row is the space switcher (the space's name, on up
+  to two lines before it is cut, and the account's role there; a Menu of the account's spaces with the current one checked, "All spaces…",
+  "Create space…" → `/spaces?create=1`); on phones the More sheet's "Space: <name>" row opens the same list as a
+  sheet. Switching opens `/s/<id>/` and stores `lyren.lastSpace`. The palette searches the current space and
+  has "Switch space…" (its list becomes the spaces; Backspace in the empty field goes back). `/spaces` lists
+  the spaces (role, member count), creates one (name, optional sample data) and restores recently deleted
+  ones until their purge date.
+- **Viewer mode** (design §12.9): a role that may not write (viewers) gets no "New task" (sidebar, "+",
+  `c`, palette, the shortcut help, which also leaves out writing and moving cards), quick-add rows, bulk select, card or row "⋯" menus, task-menu edits (the drawer's and task
+  page's menus keep Open, Copy link and Open full page), drags (cards, projects, milestones, epics, boards),
+  create/edit/delete of projects, milestones, epics and boards, comment composer or "Log time"; the task's
+  title, properties and description, and milestone and epic fields, show their values only
+  (`PropertyButton readOnly`, `InlineEdit disabled`). Board configuration changes then apply to the view and
+  are not saved. Every PageHeader in such a space carries a "View only" badge. Members may not delete
+  projects, merge or delete tags, or change statuses and the space settings; admins and owners also delete
+  anyone's comments and work logs (`entryActions`). Authors and task creators who left the space read
+  "<name> (former member)", deleted accounts "(deleted account)" (lib/people.ts). The server enforces the same
+  rules (the space gate, design §6.4).
+- **Data**: use the hooks in `web/src/api/*` (they define keys and invalidation). Space requests go through
+  `spaceApi(spaceId)` (`/api/s/<id>…`), directory requests through `http`/`request`; every key of a space's
+  data starts with `['space', spaceId]` (`qk.*(sid, …)`, api/keys.ts), and hooks capture the space when they
+  start, so an answer that arrives after a switch lands in its own space. Space reads are conditional: the
+  client keeps each one's last ETag and body in memory (api/etagStore.ts: 200 entries, 20 MB of JSON text,
+  least recently used out; cleared with the user's data and per space left or lost), sends `If-None-Match`
+  and answers a 304 with the stored body. Read projects, milestones, epics, statuses, tags, boards, people,
+  settings (the space's merged with the account's preferences) and the user from `useLookups()` (bootstrap,
+  memoized per payload) — never refetch them per page. Mutations already invalidate the right caches; show
+  `toast.error(err)` on failure; `errorMessage` (api/errors.ts) maps the error codes to texts (§12.11 of the
+  design; an answer without our error body that names Cloudflare's error 1027 is the daily usage limit, any other
+  such 429 "Too many requests. Wait a moment and try again."), and a 421 `wrong_host` moves the page to
+  `PUBLIC_URL` once per load.
+- **Navigation model**: ≥ md: collapsible left sidebar (the space switcher, Dashboard, Projects list, Boards
+  list, Activity, Work log, Settings (the space's); search + new-task buttons; user menu with Account settings
+  and, for instance admins, Administration). < md: bottom bar (h-14 + safe area) with Home (dashboard) ·
+  Projects · Boards · Search (palette) · More (sheet: the account's email address, the "Space" row, Activity,
+  Work log, Settings, Account settings, Administration (instance admins), theme,
   sign out; also opened by the 'toggle-nav' event; it rests on top of the bar, which stays usable by touch:
   More closes it again, the other tabs leave it. While the sheet is shown the bar is aria-hidden and out of
   the Tab order, and the sheet has its own Close button (first Tab stop; Esc works too)), plus a floating "+"
@@ -612,7 +883,15 @@ Draggable/sortable ids are `${laneKey}|${colKey}|${taskId}`; read the source key
   + toast "Could not reach the server". AppShell shows a thin "Offline — changes can't be saved" banner
   (navigator.onLine / onlineManager). Forms keep their content when a submit fails. Unsent drafts (comment,
   work log, create-task) may be kept per task in sessionStorage. `localStorage` only for per-device prefs
-  (theme, sidebar collapsed, last-used project, per-device board list toggle, recent items).
+  (theme, sidebar collapsed, last-used project, per-device board list toggle, recent items). Keys that hold a
+  space's ids are the space's (lib/spaceStorage.ts: `lyren.s.<spaceId>.palette.recent`, `.lastProjectId`,
+  `.projectBoard.<id>`, `.overview.<id>`, `.createTaskDraft`, `.draft.<kind>.<taskId>`); device preferences stay
+  global (`lyren.theme`, `lyren.sidebar.*`, `lyren.board.listOnPhone`, `lyren.project.showDescription`,
+  `lyren.trayHint.dismissed`, `lyren.chunkReloadAt`, `lyren.lastSpace`). The unprefixed keys of the client
+  before spaces move into `AuthStatusDTO.legacySpaceId`'s space (the upgraded data; named only to its members)
+  the first time it is opened while `lyren.legacyKeysMoved` is unset, which is then set; no other space gets
+  them. Unsent drafts belong to the account signed in in the tab (sessionStorage `lyren.draftsAccount`):
+  signing out drops them, and they are dropped before another account's pages read any.
 - **Styling**: Tailwind utilities with the semantic tokens in `web/src/index.css` (`bg-surface`, `text-fg-muted`,
   `border-border`, `bg-accent text-accent-fg` …). Never hard-code grays/blacks/whites for UI chrome — both
   light and dark themes must look right. Entity colors (user data) via inline style + lib/colors.ts.
@@ -633,6 +912,119 @@ Draggable/sortable ids are `${laneKey}|${colKey}|${taskId}`; read the source key
   `useDocumentTitle()`. Empty/loading/error states everywhere (`EmptyState`, `Skeleton`/`Spinner`, `ErrorState`).
 - **Optimistic UI**: task edits via `useUpdateTask` are optimistic (cards move immediately); board config
   edits via `useUpdateBoard` are optimistic and serialized.
+- **Re-auth** (design §5.4.4, §12.8): one `ReauthHost` (features/account/ReauthDialog.tsx, mounted by AuthedApp)
+  asks for the password (`POST /api/account/reauth/password`) when the account has one, and offers "Use a passkey"
+  (`POST /api/account/reauth/passkey`) where passkeys are available and one of the account's works on this address
+  (`GET /api/account/passkeys`, `rpIdMatches`; `reauth.ts#reauthMethods`). Actions that know they need the window call
+  `ensureReauth()` first (the space archive's download, Replace this space's analysis and commit and its
+  "Download the current data first", every write of Administration and its Download
+  backup, deleting the account or a space, transferring ownership, role changes to or from admin and owner, adding or
+  removing a passkey, setting a first password): it goes on at once while `AuthStatusDTO.reauthUntil` is more than 30 s
+  ahead, else opens the dialog and resolves false when it is cancelled. Any request answered `reauth_required`
+  opens the dialog too (the API client's `setReauthHandler`) and is sent once more after the confirmation;
+  requests refused together share one dialog, and a closed dialog rejects them with a `ReauthDeclinedError`
+  (api/errors.ts), for which `toast.error` shows nothing. An account that cannot confirm here (no password, no
+  passkey that works here) is told how a reset link gets it one (`reauth.ts#resetLinkWayText`).
+  Downloads start after the check, never from a plain link.
+- **Administration** (`/admin`, instance admins; design §12.2): Overview, Settings, Users (and a page per
+  account), Invitations and Spaces, from `GET /api/admin/*`; the texts are pure modules in features/admin/
+  (`overview.ts`, `settings.ts`, `users.ts`, `spaces.ts`, `invitations.ts`). A link to pass on (an instance
+  invitation's or a reset link, when the instance sends no mail) is shown with `ShareLinkField`
+  (lib/shareLinks.ts: made absolute, a choice among `shareOrigins`, a warning on a loopback address) and a copy
+  button (`CopyField`, lib/clipboard.ts). Actions whose row may leave its list await `mutateAsync()` for their
+  toasts.
+- **Security notices** (design §5.8.11, §12.7): `AuthStatusDTO.notices` (an administrator created a reset link,
+  the recovery token was used) show once as a banner after sign-in (`NoticesBanner`) and are marked seen
+  (`POST /api/account/notices/seen`) as soon as they arrive.
+- **Public pages** (design §12.2, §12.7): `/login`, `/setup`, `/signup` and `/forgot` are for signed-out browsers
+  (`PublicOnly`); the pages a link opens, `/signup/complete`, `/reset`, `/email/confirm`, `/invite` and
+  `/recover`, work signed in or out (`PublicPage`) and ask for nothing but the auth status before their own
+  request. The sign-in page offers "Forgot password?" only when `instance.mailLinks` (links can be mailed: `mail`,
+  or `MAIL_LOG_BODIES` in development, which writes them to the log), else "ask an administrator for a reset link"
+  (plus the `reset-password` command on Node), and "Create an account" only under the `open` policy while links can
+  be mailed (`features/auth/linkPages.ts`; `/signup` says sign-up is not available otherwise). Verification, the
+  email change's confirmation and the policy's `open` follow `mailLinks` too; invitations follow `instance.mail`. A link's token is in its fragment (`#t=…`): it leaves the address bar
+  before the router reads the address (`lib/linkToken.ts`, called by app/App.tsx) and is kept in memory for its
+  page only, never in a query string or storage; a reload therefore asks for the link again. Every refused token
+  (unknown, used, expired, revoked: one server answer) gets the page's "can't be used" state with the server's
+  message and where a new link comes from; password fields show and check `instance.passwordMinLength`. The
+  email confirmation sends its link on load: a verification or an email change works only in a session of the
+  link's account, on any device (signed out: an inline sign-in as the account the server names, then the link
+  again; another account: sign out first). `/invite` shows who invited whom to what and offers, by
+  `InvitationPreviewDTO`: join (a member already is told what accepting changes, `signedIn.memberRole`), "this
+  invitation is for <address>" with sign-out, create the account, sign in and join, or both when a copied link
+  cannot say whether the address has an account; accepting lands in the space. Refusals the reader cannot fix
+  say what to do: sign-up closed (sign in with an account of one's own, or ask the inviter or an
+  administrator), a full space (ask the inviter to make room). Where passkeys are available, the pages that give
+  an account a way in offer a passkey instead of a password (`features/auth/PasskeyChoice.tsx`: "Use a passkey
+  instead" on `/signup/complete` and a new account's `/invite`, "Set up a passkey instead" on `/reset` when
+  `canUsePasskey`; the page says whether the passkey replaces the password, and the reset then opens the sign-in
+  page with "Passkey set up, and your password removed. Sign in with the passkey." or why the password stays,
+  `linkPages.ts#passkeyResetText`/`passkeyResetNotice`, the focus on "Sign in with a passkey").
+- **Passkeys** (design §5.6, §5.8.3, §5.8.12, §5.8.13, §12.7): nothing about them shows unless
+  `lib/passkeys.ts#passkeysAvailable`: `instance.passkeys.enabled`, `window.isSecureContext`, `location.origin ===
+  instance.passkeys.origin` and `browserSupportsWebAuthn()` (so never in the desktop app, on an IP or LAN
+  address, or at another origin of the instance). `api/passkeys.ts` runs every ceremony (the options call,
+  @simplewebauthn/browser's `startRegistration`/`startAuthentication`, the answer with its `ceremonyId`). The
+  sign-in form (`SignInForm`, also on `/invite` and `/email/confirm`) has "Sign in with a passkey" and the
+  identifier field's autofill (`autocomplete="username webauthn"`, a conditional request asked for on mount,
+  `features/auth/usePasskeySignIn.ts`): the button aborts the pending autofill request before its own, the
+  autofill asks again after a picked passkey failed or a timeout and is renewed before its 10-minute ceremony
+  expires, and a passkey the server calls unknown is reported to the browser (`signalUnknownCredential`). A
+  ceremony a button started and the browser ended with NotAllowedError says so quietly ("No passkey was used…",
+  `lib/passkeys.ts#failureText`); `@simplewebauthn/browser` is loaded with the first ceremony (`import()`, ahead of
+  time where a page offers one, `usePreloadedWebAuthn`), never in the entry chunk.
+  Account settings → Security lists the passkeys (name, renamed in place; "Synced", "Not backed up" or "This
+  device only"; added, last used; "Doesn't work here" with an explanation for another RP ID), adds one (re-auth
+  first; the name proposed from the browser and system, `settings/passkeys.ts#proposedPasskeyName`), removes one
+  (the last that works here of an account without a password says why it cannot go, as the server would;
+  `signalAllAcceptedCredentials` afterwards), nudges an account without a password whose passkeys are all
+  single-device (`suggestsAnotherPasskey`), offers "Remove password" with a passkey that works here (the
+  server's 409 reasons shown in the card) and "Set password" to an account without one (re-auth first). The
+  sessions list says which sign-ins used a passkey, the security log names the passkey events, and
+  Administration → Users shows "Signs in with" (a password and the number of passkeys, and how many do not work
+  here) and marks "Can’t sign in here" the accounts without a password none of whose passkeys works here, which
+  `?orphaned=1` (the link of the overview's warning) lists alone.
+- **Invitations in the app** (design §5.8.8, §12.9): a space's Settings → Invitations (admins and owners; the
+  Members page has "Invite people") invites an address with a role (`canInviteRole`; admin invitations ask for
+  the password first), mails it or, without mail, shows the link once with `ShareLinkField`, and lists the open
+  invitations with "Send again" and "Revoke" (an admin invitation is an owner's). Refusals keep the form filled
+  in: the address at the field, quotas and daily limits above it with what to do, an unverified inviter pointed
+  at Account settings (with mail, said in place of the form before anything is sent, here and in Administration →
+  Invitations). `/spaces` lists the account's own pending invitations (`GET /api/invitations`, instances
+  with mail and a verified address) to accept or decline. Account settings → Profile changes the address
+  (re-auth; with mail a confirmation link to the new address, without mail at once), sends a new verification
+  link, and prompts an account from before email addresses to add one.
+- **Space archive in the app** (design §12.10, §8): Settings → Data (owners) has "Download space archive"
+  (`ensureReauth()`, then the plain GET of `api/importExport.ts#exportUrl`), "Import a space…" and "Replace this
+  space". An import into a new space runs on `/spaces/import` (also from /spaces): choose the file, which the
+  browser checks first (`features/import/archiveFile.ts`: gzip unpacked with `DecompressionStream`, at most
+  `instance.limits.importMaxBytes` packed and unpacked; v1 or v2; the frame, then each row through
+  `parseBounded`, the first 5 problems listed; a file that is no JSON object at all, "This is not a Lyren Plan
+  archive (.json.gz) or 1.x export (.json)."), name the space (the archive's name by default), Continue (`POST
+  /api/spaces {forImport: true}`, then analyze; `?space=<id>` keeps the page on that space, which /spaces lists as
+  "Import not finished" with Continue and Discard, and `/s/<id>/…` of an importing space leads there; a refusal
+  after Continue says that the space waits for an archive, not that nothing was changed), map the people, Import,
+  and the result. The mapping step (`MappingStep`, `mapping.ts`) has a row per person the
+  archive names (name, address, how many tasks, comments, work logs and activity entries name them) with a
+  picker and its filter box: "Keep as former member (name only)", "<name> (you)", then the candidates with their
+  addresses, preselected from the suggestions; Import waits until everyone is mapped and the estimate fits
+  `limit` and `dailyLeft`, offering "Import without the activity history" when that makes it fit, and saying
+  either limit otherwise ("has reached today's import limit" only when nothing is left of it, else what is left,
+  and to try again after 00:00 UTC when that is all that stands in the way). Replace this space (`ReplaceSpace`)
+  asks for the re-auth window, analyzes with `mode=replace`, shows the same step, "Download the current data
+  first" (on Cloudflare, where the server keeps no copy, Replace stays disabled until it was used for this
+  analysis: a second replace needs a download of what the first wrote) and the typed `REPLACE` confirmation; the
+  result names Node's snapshot and, for instance admins, the command that undoes the import, whole, to copy (the
+  desktop app's own program with the data it opened; else `DATA_DIR=/path/to/data node dist/server.mjs restore
+  "<path>"`, with the Docker form under it). A result's
+  `nonMemberAuthors` get "Invite them to this space": Settings → Invitations opens with a prefilled form for
+  each (router state, `importResult.ts#invitesFromState`). Comments, work logs and activity entries an import
+  or a reassignment attributed to their author say "Imported by <importer> on <date>"
+  (`features/timeline/ImportedNote.tsx`, `lib/people.ts#importedText`), with "Not yours?" on the viewer's own;
+  that, and the Members page's "These entries aren't mine…", disowns them (`POST …/people/me/disown`, after a
+  confirmation). Members → Former members has "Reassign…" for admins (`features/settings/authorship.tsx`: a
+  member to move the person's entries to, `POST …/people/:personId/reassign`).
 - **Dashboard**: tiles and section badges show `DashboardDTO.counts` (exact totals) and "Across N projects"
   `inProgressProjects`. A section shows 5 rows, then all rows of its list; when `counts.x` exceeds the capped
   list, expanding loads the whole section once (`useFullSection`: POST /api/tasks/query with the section's
@@ -646,7 +1038,8 @@ Draggable/sortable ids are `${laneKey}|${colKey}|${taskId}`; read the source key
 - **Editing text**: the task description saves on blur, mod+Enter and Esc; only its Cancel button discards
   (asking when changed). Closing the drawer (Back, ←, ×, another task) while editing an existing comment or
   work-log entry saves the edit; only Cancel (or Esc in a comment) discards it, and a changed comment asks first.
-- Keyboard shortcuts: `c` new task, `mod+k` and `/` search, `?` shortcuts help, `Esc` close (top overlay).
+- Keyboard shortcuts: `c` new task (not for viewers), `mod+k` and `/` search, `?` shortcuts help, `Esc` close (top
+  overlay).
 
 ### 9.1 Cross-team component contracts
 - `MenuItem` (components/ui/Menu): `{ label: string; icon?: ReactNode; onSelect?: () => void; danger?: boolean;
@@ -684,8 +1077,42 @@ Draggable/sortable ids are `${laneKey}|${colKey}|${taskId}`; read the source key
 
 ## 10. Testing & verification (every agent)
 
-- Typecheck your area: `npx tsc -p tsconfig.server.json` and/or `npx tsc -p tsconfig.web.json`. Other agents
-  work in parallel, so errors in files you don't own may appear — ignore those, but your files must be clean.
+- Typecheck your area: `npx tsc -p tsconfig.server.json` and/or `npx tsc -p tsconfig.web.json`, and
+  `npx tsc -p tsconfig.worker.json` for server code that also runs on Cloudflare (`server/src` except
+  `index.ts`, `sea.ts`, `cli.ts`, `config.ts`, `desktop/` and `runtime/node/`; there, encode bytes with
+  `core/crypto.ts` instead of `Buffer#toString`). Other agents work in parallel, so errors in files you don't
+  own may appear — ignore those, but your files must be clean.
+- Two vitest projects (`vitest.config.ts`), both offline: `node` (`shared`, `server/test`, `web/src`,
+  `scripts/test`) and `workers` (`server/test-workers`, run inside workerd from
+  `server/test-workers/wrangler.test.jsonc`). Pick one with `--project node` / `--project workers`. In the node
+  project NodeDb's portability checks are on (they also run with `LYREN_DB_STRICT=1`): SQL a Durable Object
+  would reject or run differently throws (more than 100 parameters, `BEGIN`, `PRAGMA user_version`, `LIKE :param`,
+  `INSERT OR ROLLBACK`, `last_insert_rowid()`, a 6-term `UNION`, …; design §9.4); Node-only
+  maintenance SQL goes through `db.raw`. The Db contract (`server/test/contract/db.contract.ts`), the space
+  service suites (`server/test/contract/services.*.contract.ts`, each given a `WithSpaceDb` that runs a body on a
+  fresh space database) and the statistics' equivalence test against the queries they replaced
+  (`contract/stats.contract.ts`) run on both: the node files of the same names are thin wrappers, and
+  `server/test-workers/{db.contract,services,stats}.test.ts` run them on `DoDb`. `server/test-workers/cost.test.ts`
+  is the rows-read budget of design §11.2 (`--reporter=verbose` prints its measurements).
+  Each `workers` run makes wrangler write a debug log to `~/.config/.wrangler/logs`; for hermetic runs set
+  `WRANGLER_LOG_PATH` to a temporary directory (and `WRANGLER_SEND_METRICS=false`). The workers tests that go
+  through the real Worker and Durable Objects (`SELF.fetch` to `https://plan.example.com`) share
+  `server/test-workers/support.ts`; `entry.ts` counts the calls that reach each object. The workers project's
+  global setup (`server/test/support/smtpGlobalSetup.ts`) starts fake SMTP servers in Node on 127.0.0.1 for
+  `server/test-workers/smtp.test.ts` (ports and certificates through `provide`/`inject`); the SMTP tests make
+  their TLS certificates with `openssl` at test time (`server/test/support/testCerts.ts`; never committed) and
+  skip the TLS cases, saying so, without it. The mail tests send through the recording transport
+  (`server/test/support/mail.ts`: `outbox`, `failWith`, `hold`; `linkToken(message)` reads a link's token).
+  The account flows have a file each in `server/test/directory/` (signup, reset, emailChange, invitations,
+  adminResetLink, recovery, tokens, the §5.3 matrix in policy.test.ts, and enumeration.test.ts, which checks that
+  an address with and one without an account get the same answer and run the same statements), and so does the
+  instance administration (adminOverview, adminUsers, adminSpaces; `server/test-workers/admin.test.ts` through
+  the Worker). The gateway table
+  (`server/test/gateway/cases.ts`) runs on both runtimes. `npm run check:cf` bundles the Worker the way a deploy
+  would (`wrangler deploy --dry-run`, offline) and leaves the result in `dist/worker`.
+  `scripts/test/deploy-cloudflare.test.mjs` reads the deploy workflow with a strict YAML-subset reader
+  (`scripts/test/support/workflow-yaml.mjs`) and runs the deploy scripts against a fake `npx` that records what
+  Wrangler would get; `scripts/test/wrangler-config.test.mjs` pins `wrangler.jsonc`.
 - Server: API tests for every endpoint you own — happy paths, validation (400), not found (404), conflicts,
   activity entries written, edge cases from §5. `npx vitest run server/test/<yours>.test.ts`.
 - Web: unit tests for non-trivial pure logic (`*.test.ts` next to it, node environment).
@@ -706,39 +1133,172 @@ A project board "WEB board" for WEB (columns by status, swimlanes by epic) and a
 ## 12. Deployment
 - `npm ci && npm run build && npm start` → http://localhost:8080. Env: see `node dist/server.mjs help`. A
   single-file desktop app is built from the same sources (§12.1).
-- `dist/` is self-contained (server bundle + web assets); only Node ≥ 22.13 is needed at runtime. When
+- `dist/` is self-contained (server bundle + web assets); only Node ≥ 22.13 is needed at runtime.
+- **Node.js release archive** (`npm run package:node` = `scripts/pack-node.mjs [--no-build]`, helpers in
+  `scripts/lib/node-tarball.mjs`): `dist/lyren-plan-<version>-node.tar.gz` + `.sha256` (`<hex>  <name>`). One top folder
+  `lyren-plan-<version>/` with `server.mjs` and `web/` only, every `*.map` left out; written by its own ustar writer:
+  each folder before its contents, names in byte order, uid/gid 0 (`root`), dirs 0755, files 0644, one mtime
+  (`SOURCE_DATE_EPOCH`, else the mtime of `dist/server.mjs`), padded to 10240 bytes, gzip level 9 with mtime 0 and OS
+  3; only regular files and folders (a symlink is refused); names over 100 bytes use the ustar prefix. Refused unless
+  `node dist/server.mjs help` prints `Lyren Plan <package.json version>` (a stale `dist/`). The archive is read back and
+  checked before it is written. `docs/ubuntu-server.md` installs it on Ubuntu 26.04 (`/usr/bin/node` from the
+  `nodejs` package, `/opt/lyren-plan/lyren-plan-<version>` + `current` symlink, user `lyren`, `StateDirectory=`
+  `/var/lib/lyren-plan`, sandboxed unit, backup service + timer); README's systemd, backup, restore, upgrade and
+  reset-password examples use the same paths. When
   `WEB_DIR` is set but has no `index.html`, the server logs "Web client not found: no index.html in <dir>"
   (and keeps serving the API), and app routes answer 503 with a short self-contained HTML page saying so
   (no paths in it); a later build is picked up without a restart.
 - Start-up failures a self-hoster can fix are printed as plain lines, not stack traces (`startupErrors.ts`): an
   invalid env value (exit 2), a database that can't be opened for permission reasons (path, uid and a
-  `chown` hint; exit 1), a data directory that can't be created because its drive or a parent is missing
+  `chown` hint: the Docker bind mount's only in a container, `LYREN_CONTAINER=1` in the image, `/.dockerenv` or
+  `/run/.containerenv`, else for this user and folder, or, when the folder's `mkdir` was refused, the nearest
+  existing folder above it and an `install -d -o <uid> -m 700` hint; exit 1), a data directory that can't be created because its drive or a parent is missing
   (ENOENT) or a file stands in the way (EEXIST/ENOTDIR, naming the file; `fileInTheWay`), a Windows path too
   long for SQLite (CANTOPEN with a folder of ≥ 248 characters; exit 1), and listen errors (port in use,
-  privileged port, bad HOST; exit 1). Only unknown causes (a failed migration, a corrupt file) add the stack.
+  privileged port, bad HOST; exit 1). Only unknown causes (a failed migration, a corrupt file) add the stack. A
+  space's file the server cannot open or write (its owner or mode, a read-only disk) answers 503 "The server cannot
+  open this space's data; its log says why." and the log explains it once, as above, until the file opens again.
+  `LOG_REQUESTS` lines carry Hono's colours only on a terminal without `NO_COLOR` (journald, `docker logs` and
+  files get plain text).
 - **First run**: the server prints a one-time **setup code** to its log (or use `SETUP_TOKEN`); the setup
   page asks for it, so a freshly exposed instance can't be claimed by someone else.
+- **Passkeys** (design §5.6, Appendix B): on when `PUBLIC_URL` is an https origin (or `http://localhost`) whose host
+  is a name, so the desktop app (127.0.0.1) and installs reached by a LAN address stay password-only. The RP ID is
+  `WEBAUTHN_RP_ID` (the host or a parent domain of it with at least two labels, never `workers.dev` or
+  `pages.dev`) or the host; a value that does not fit, or one set while passkeys are off, stops the start (exit 2;
+  on Cloudflare the API answers 503 with the reason). Passkeys belong to their RP ID: a later move to another
+  host orphans them, and the start-up log (on Cloudflare the hourly maintenance's log) and Administration → Overview
+  count the accounts that can then only sign in with passkeys that do not work; Administration → Users lists them
+  (create reset links for them; the `reset-password` command on Node, the recovery token on Cloudflare for an
+  administrator's account).
+- **Mail** (design §5.10, Appendix B; README → Configuration): `MAIL_TRANSPORT=log` by default, the desktop
+  app included: nothing is sent, and each message is one log line naming its template and the recipient's
+  domain (`MAIL_LOG_BODIES=1`, development only, prints the text part, links included, so the flows that need a link
+  work, `open` sign-up included, and is warned about unless `PUBLIC_URL` is on this machine; always on Cloudflare). `smtp`, `resend` and `cloudflare` need `MAIL_FROM` (an address) and
+  `PUBLIC_URL` (the links); `MAIL_FROM_NAME` (default `INSTANCE_NAME`), `MAIL_REPLY_TO`, `MAIL_DAILY_CAP`
+  (200). SMTP: `SMTP_HOST`, `SMTP_SECURITY` `tls` (implicit, port 465, the default) or `starttls` (587; the
+  server must offer it) — the certificate is always verified against `SMTP_HOST` — or `none` (25), only for a
+  mail server on this machine (`localhost`, `127.x.x.x`, `[::1]`) and without credentials; `SMTP_USER` and
+  `SMTP_PASS` together (AUTH PLAIN, or LOGIN, only over TLS); `SMTP_EHLO_NAME` (default the host of
+  `PUBLIC_URL`). Resend: `RESEND_API_KEY`. Cloudflare: a `send_email` binding named `EMAIL`. A bad value stops the
+  start with the variable's name (exit 2); `SMTP_PASS` and `RESEND_API_KEY` appear in no message, log line or
+  API answer. Messages are multipart text and HTML, `Auto-Submitted: auto-generated`, with no images or tracking;
+  subjects hold no user text, names people chose are cut and replaced by neutral text when they look like
+  links or addresses. Each message counts on `mail:<UTC day>` (`MAIL_DAILY_CAP`), the ones anonymous requests
+  cause (sign-up, forgot password, the failed sign-ins' notice) also on `ma:<day>` (40% of it), and every one
+  but the security notices on `mr:<address>` (5 a day); a forgot request for an address without an active
+  account counts as its message would. One over a budget, or one the transport fails, is dropped with a log
+  line and a `mail_failed` security event of the recipient's account (none for an email change's message to
+  the new address). The SMTP client refuses a reply over 64 KiB or 512 lines.
+  Invitations and the admin's test message are sent at once, everything else after the response.
 - Docker: multi-stage `Dockerfile` (node:24-alpine), volume `/data`, non-root user (uid 1000), healthcheck on
   `/api/health`. Bind mounts need `chown 1000:1000` (or `user:` in compose).
 - Behind a TLS reverse proxy set `TRUST_PROXY=true` (secure cookies + real client IPs from the RIGHTMOST
   X-Forwarded-For entry) and publish the port only on localhost (`127.0.0.1:8080:8080`) so clients can't
   bypass the proxy.
-- Backups: Settings → Data (download), or `node dist/server.mjs backup <file>` (safe while running; e.g.
-  `docker exec lyren-plan node dist/server.mjs backup /data/backups/x.db` from cron). Restore: stop the server,
-  replace `lyren.db`, DELETE `lyren.db-wal` and `lyren.db-shm`, start.
+- Data layout (design §3.1, §9.2): `DB_PATH` (default `DATA_DIR/lyren.db`) is the directory (accounts, sessions,
+  spaces, memberships); each space is `spaces/<id>.db` next to it (`<file name>.spaces/` for a `DB_PATH` not named
+  `lyren.db`), kept open in an LRU of `SPACES_OPEN_MAX` (32); both are marked `user_version = 100`, so builds from
+  before the split refuse them.
+- Backups (design §9.5, `runtime/node/backupSet.ts`): a backup set is one ustar file holding `lyren-backup.json`
+  (the manifest: format, version, createdAt, appVersion, the directory's and each space's file, schema version and
+  size), `directory.db` and `spaces/<id>.db` for every space the directory lists (active, importing, and deleted
+  within the grace period). An instance admin downloads one (`GET /api/admin/backup`, Administration → Overview; off with
+  `ALLOW_ADMIN_BACKUP_DOWNLOAD=false`), or `node dist/server.mjs backup <file>` writes one (safe while running; e.g.
+  `docker exec lyren-plan node dist/server.mjs backup /data/backups/x.tar` from cron; a name ending in `.db` still
+  works and gets the note "Note: the backup is a .tar backup set; name it .tar"). Each database in it is a consistent
+  snapshot; the directory is taken first and the spaces are those it lists (a space whose file is missing fails the
+  backup, exit 1). Sessions, device tokens, sign-in tokens, passkey challenges, throttle counters and open
+  invitations are left out.
+- Restore (design §9.6, `runtime/node/restore.ts`): `node dist/server.mjs restore <file|->` stages a backup set, one
+  space's database (a pre-import or space-v<N>-before-upgrade snapshot; its space must be one the current directory
+  lists and has not purged, else "This space no longer exists here") or a 1.x database, told apart by content; a
+  directory file alone ("This is only the directory of a backup; restore the .tar backup set"), anything else, damaged
+  databases (`quick_check`) and data from a newer build ("This backup was made by a newer version of Lyren Plan.
+  Install that version, or a newer one, to restore it.") are refused before anything is staged, and so is every
+  restore while DB_PATH still holds a 1.x database (the §3.8 message below), or while the folder of DB_PATH has less
+  free space than the staged copy plus 64 MiB ("Not enough free disk space to restore this backup: about <n> MB are
+  needed in <folder>, <m> MB are free. Nothing was staged."). `-` reads standard input into
+  `.restore-<16 hex>.in` in the data folder first (a refusal then names "Standard input", not that copy); a relative
+  name that is not in the working folder (or that this user cannot reach there) is looked up in the data folder (the
+  import's `backups/spaces/<id>/pre-import-….db`); a file this user cannot read gets "<file> cannot be read as this
+  user (<name>): pipe it in with `restore -` (see the README)." (exit 1). The staging folder is DB_PATH's:
+  `.restore-pending/` next to `lyren.db`, `.<file name>.restore-pending/` next to any other name. Staging extracts (or
+  copies with `VACUUM INTO`) into a folder of its own, `.restore-<16 hex>.partial/` (`directory.db` + `spaces/`,
+  `spaces/<id>.db`, or `legacy.db` with its sign-in sessions deleted), sets every staged space's `_meta.sync_version`
+  to 0 (its mirror syncs at its first request), fsyncs, writes `READY` (DB_PATH's file name, the build, the kind, the
+  stamp, the manifest or space) and renames the folder to the staging folder; then prints "Restart Lyren Plan to
+  complete the restore (systemctl restart lyren-plan, or docker restart lyren-plan)." plus, when there is current data,
+  " The current data will be moved to backups/before-restore-<stamp>/." (desktop: "Quit Lyren Plan and start it again
+  to complete the restore."). The next serving start (`openNodeStack` mode 'serve', the desktop app after its instance
+  lock) applies it before anything is opened, under a lock of its own (an exclusive SQLite lock on `APPLYING` in the
+  staging folder, which ends with the process; another start at the same moment waits for it like the lock on
+  DB_PATH, then stops with the message that follows and moves nothing, or finds the restore applied): an exclusive
+  lock on DB_PATH proves nobody else uses the data ("Lyren Plan is still running with this data folder. Stop it,
+  then start it again to complete the restore.", exit 1; DB_PATH is opened by the `file:` URI with `mode=rw` where
+  node:sqlite takes URIs, so it is never created, and on Node 22.13 by name, the empty file SQLite creates when
+  DB_PATH was moved away a moment before being removed again); before anything moves, every staged database must
+  be there and be one this build can use ("The staged restore in <folder>
+  is incomplete. Delete that folder, then run restore again." / "… was made by a newer version of Lyren Plan. Install
+  that version, or a newer one, to complete it, or delete that folder to cancel it.", exit 1); `PHASE` moving-out
+  moves DB_PATH (+ `-wal`/`-shm`/`-journal`) and the spaces folder (one space: its file) to
+  `backups/before-restore-<stamp>/` (never pruned), moving-in puts the staged files in place (a `legacy.db` becomes
+  DB_PATH, and the legacy upgrade then runs), each move skipping what is done, so an interrupted apply finishes at the
+  next start; `READY` is deleted first, then the folder (when that fails, "Could not remove <folder> (<code>); the next
+  start removes it." and the start goes on). While `READY` exists every maintenance command (`backup` and `restore`
+  included) stops with "A restore is waiting: restart Lyren Plan to complete it, or delete <staging folder> to cancel
+  it.", and once the apply has begun (`PHASE` exists) with "A restore was interrupted while it was being applied:
+  start Lyren Plan to finish it. Do not delete <staging folder>; the data it replaces is in
+  backups/before-restore-<stamp>/." (exit 1). Restore by hand: stop the server, move `lyren.db*` and `spaces/` away,
+  extract the set as the service user, put `directory.db` as `lyren.db` and `spaces/` in place, start; a space whose
+  file holds a newer `_meta.sync_version` than the directory syncs its mirror at its first request all the same.
+- Other maintenance commands: `promote-admin <email-or-username>` sets `is_instance_admin = 1`; `policy
+  [open|invite_only|closed]` prints or sets `instance_settings.signupPolicy` (`open` refused while sign-up links
+  cannot be mailed: no transport that delivers mail and no `MAIL_LOG_BODIES`, exit 1); a promotion and a policy change are security events without an actor (`data.via: 'cli'`),
+  listed in Administration → Overview; `spaces` prints a table of every space (id, status, name, owners' emails or usernames, the
+  size of its database with its `-wal`, as Administration → Spaces shows it); an unknown account lists up to 20 (as reset-password); `help` lists the commands and the variables by group
+  and ends "See README → Configuration.". Usage errors exit 2, failures 1. Before touching any file the server, the
+  desktop app and every command but `help` run the owner check (`runtime/node/owner.ts`, design §9.2): as root
+  (`process.getuid() === 0`) on a data folder (the folder of DB_PATH) another uid owns, they stop with "Run this as the
+  owner of <folder>, for example: sudo -u <name> …" (exit 1; the name from /etc/passwd, else `#<uid>`); Windows has no
+  check.
 - Upgrading: pull/build/restart (`docker compose build --pull && docker compose up -d`); migrations run
-  automatically on start after writing a snapshot `lyren-v<N>-before-upgrade-<timestamp>.db` to `backups/` next
-  to the database file (`DATA_DIR/backups/` unless `DB_PATH` is set); an older build refuses a newer DB.
+  automatically on start after writing a snapshot (`directory-v<N>-before-upgrade-<timestamp>.db` in `backups/`
+  next to the directory file, `space-v<N>-…` in `backups/spaces/<id>/`); a build refuses data from a newer one. A
+  1.x database (one file, no `_meta`, `user_version` 1) is upgraded by the first start of the server or the desktop
+  app (design §3.8, `runtime/node/legacy.ts`), as its only user (it stops with "Lyren Plan or another program still
+  has <DB_PATH> open. Stop it and start Lyren Plan again." while anything else has the file open, and leaves a file
+  that another start upgraded meanwhile to the normal open): a snapshot
+  `backups/lyren-v1-before-upgrade-<timestamp>.db`, then a space "<owner's display name>'s space" with every row and
+  id, and a directory with the same accounts (the lowest id an instance admin, the 1.x preferences the owner's),
+  their unexpired sessions (signed-in browsers stay signed in) and `legacySpaceId`; an interrupted upgrade is redone
+  from the 1.x file at the next start. A start or command that finds the directory file held by another connection
+  (another start upgrading it, or switching a restored file to WAL) stops with that same message (exit 1): at once
+  at its first, read-only look, and after the busy timeout (5 s) when it opens and migrates the file. Maintenance
+  commands never upgrade: on a 1.x file `backup` writes the old
+  single-file backup (sessions removed) with "Note: this data has not been upgraded yet, so this is an old-format
+  backup. Lyren Plan upgrades the data the next time it starts.", and every other command stops with "This data has
+  not been upgraded yet. Start Lyren Plan once with this version, then run the command again." (exit 1).
 - Snapshot retention (`db/snapshots.ts`): after writing an automatic snapshot, keep the newest `SNAPSHOT_KEEP`
-  (default 10; 0 = keep all) of that kind — pre-import and pre-upgrade counted separately — and delete the
-  rest. Only regular files whose whole name matches the kind's pattern are candidates (user backups, renamed
+  (default 10; 0 = keep all) of that kind in its folder — pre-import and each pre-upgrade kind counted separately
+  — and delete the rest. Only regular files whose whole name matches the kind's pattern are candidates (user backups, renamed
   copies, symlinks and directories are never touched); the new snapshot always stays; "newest" is the
   timestamp in the name; failures are logged and never fail the import or the start-up.
-- Lost password: `node dist/server.mjs reset-password <username>` (prints a random password, or pipe one in;
-  a piped password must pass `passwordSchema`, 8–256 characters, else exit 2 and nothing changes).
+- Lost password: `node dist/server.mjs reset-password <email-or-username>` (prints a random password, or pipe one
+  in; a piped password must have the instance's minimum length (8 by default) to 256 characters, else exit 2 and
+  nothing changes; an unknown account lists up to 20). One transaction: the new hash, `password_changed_at`,
+  `auth_epoch + 1`, the account's sessions and device tokens deleted, and the lock-outs cleared (the account's
+  `lid`/`lda` counters and every address's `li`, `ln` and `lg`), also for a running server.
+  Without a shell (and on Cloudflare): an instance admin creates a reset link for another account
+  (`POST /api/admin/users/:userId/reset-link`; mailed to a verified address, else handed to the admin for 24
+  hours; never for an admin's account, nor for one demoted less than 30 days ago or not signed in since), and an
+  operator locked out of every admin account sets `RECOVERY_TOKEN` (at least 32 characters) for a while and
+  posts it with the account to `POST /api/auth/recover` (the page `/recover`; README and docs/cloudflare.md
+  "Locked out"), which returns a reset link and makes the account an instance admin when no active one is left
+  (`RecoveryLinkDTO.madeAdmin`; design §5.8.11, §5.8.19).
 - File permissions: `index.ts` (and `sea.ts`) set `process.umask(0o077)` for the server and every CLI command, and the DB
-  layer creates its directories with mode 0700, so DATA_DIR, backups/, the database, WAL and snapshots are
-  owner-only.
+  layer creates its directories with mode 0700, so DATA_DIR, spaces/, backups/, the databases, WAL and snapshots
+  are owner-only (a space file is created 0600).
   On Windows modes are ignored and a new folder inherits its parent's ACL (a drive root grants Users read and
   Authenticated Users modify). The desktop app therefore gives the folder of the database a protected DACL when
   it creates it (`desktop/folder.ts`: `icacls <dir> /inheritance:r /grant:r *<user SID>:(OI)(CI)F
@@ -762,14 +1322,15 @@ A project board "WEB board" for WEB (columns by status, swimlanes by epic) and a
   aliases can't grow it. A web folder at a drive or file-system root (`W:\`, `/`) works (the root already ends
   with the separator).
 - Windows file-system rules (all code): never rename over or delete a file that may be open (SQLite opens
-  without FILE_SHARE_DELETE); the backup-download temp copy (`DATA_DIR/.backup-<16 hex>.db`) is unlinked while
-  Node holds it open (allowed: libuv shares delete access) and again on stream close, and any copy left by a
-  crash is deleted at the next start (`removeStaleBackupTemps`); snapshot pruning tolerates EBUSY/EPERM (logged,
+  without FILE_SHARE_DELETE); the backup download's snapshots (`DATA_DIR/.backup-<16 hex>/`) are deleted once its tar
+  (`DATA_DIR/.backup-<16 hex>.tar`) is written, the tar is unlinked while Node holds it open (allowed: libuv shares
+  delete access) and again on stream close, and anything a crash left is deleted at the next start
+  (`removeStaleBackupTemps`, at a serving start only: a maintenance command may run beside a backup); a space's files are deleted only after its database is closed; snapshot pruning tolerates EBUSY/EPERM (logged,
   retried at the next prune); `VACUUM INTO` targets are bound parameters (any path, spaces, non-ASCII); state
   files are rewritten in place; piped passwords lose one trailing LF or CRLF and a leading BOM, and must be
   valid UTF-8 (cmd.exe pipes in the OEM code page): otherwise `reset-password` changes nothing and exits 2
   with a `chcp 65001` hint (on win32 a piped password containing `?` gets a PowerShell 5.1 warning). SQLite
-  gets `\\?\` paths on win32 (`db/index.ts` `sqlitePath`: the database, `stripSessions`, `VACUUM INTO`
+  gets `\\?\` paths on win32 (`runtime/node/nodeDb.ts` `sqlitePath`: the databases, backup copies, `VACUUM INTO`
   targets), because its VFS passes names to CreateFileW unchanged and MAX_PATH (260) would otherwise break
   long data folders and the snapshots in them.
 
@@ -840,19 +1401,46 @@ A project board "WEB board" for WEB (columns by status, swimlanes by epic) and a
   is an exact version and must be pinned (a test checks it).
 - **Releases** (`.github/workflows/release.yml`; README "Releases"): a pushed tag `v*` → build (ubuntu-24.04: the
   tag must equal `v` + package.json version, which must be `x.y.z` or `x.y.z-<prerelease>`; setup-node from
-  `.nvmrc`; `LYREN_NODE_PINNED_ONLY=1`; `npm ci --ignore-scripts`, `npm run check`, `package.mjs --no-build` for
-  win-x64 and linux-x64, after win-x64 `scripts/test/manifest.test.mjs` with `LYREN_TEST_REQUIRE_CACHED_NODE=1`
+  `.nvmrc`; `LYREN_NODE_PINNED_ONLY=1`; `npm ci --ignore-scripts`, `npm run check`, `pack-node.mjs --no-build` with
+  `SOURCE_DATE_EPOCH` = the commit time, `package.mjs --no-build` for win-x64 and linux-x64, after win-x64 `scripts/test/manifest.test.mjs` with `LYREN_TEST_REQUIRE_CACHED_NODE=1`
   (its official-node.exe case, which `npm run check` skips without `.cache/node`); artifact kept 7 days, 3 for a
-  dry run) → smoke-windows (windows-2025, `scripts/ci/smoke-windows.ps1` in PowerShell 7 and Windows PowerShell
+  dry run), test-oldest-node (ubuntu-24.04, setup-node 22.13.0 = the `engines` minimum, a test keeps them equal;
+  `npm ci --ignore-scripts`, `npx vitest run --project node`: the legacy upgrade of the 1.x fixture and the staged
+  restores on Node 22.13's `node:sqlite`, with no previous release needed) → smoke-windows (windows-2025, `scripts/ci/smoke-windows.ps1` in PowerShell 7 and Windows PowerShell
   5.1: .sha256, `help`, serve with `--no-browser --data-dir --port` and every standard handle redirected to a file
-  (console mode), `/api/health` with that version, `/`, `stop` exit 0, server exit 0, port closed; the server is
+  (console mode), `/api/health` with that version, `/`, `stop` exit 0, server exit 0, port closed; then the upgrade
+  check below with the previous release's exe (`-PreviousExe`, else `SMOKE_PREVIOUS_RELEASE`, else `gh release
+  download` of `lyren-plan-*-win-x64.exe` of the newest published release other than this version that has one, or
+  `SMOKE_PREVIOUS_TAG`; skipped with a `::notice::` without one, or without gh or `GH_TOKEN`; with `-CrashPrevious`,
+  the Windows PowerShell 5.1 run, the previous exe is ended with `Stop-Process -Force` and must leave `lyren.db-wal`,
+  so the upgrade starts from a crashed 1.x database; only these steps get `GH_TOKEN`); the server is
   killed on any failure; refuses without `-Exe`, a new or empty `-WorkDir` and a free `-Port` outside 43770–43779,
-  or with any other argument, and removes the app's variables for what it starts) → release (contents: write;
-  `scripts/ci/publish-release.sh`: checks the .sha256 files, writes SHA256SUMS, `gh release create --verify-tag
+  or with any other argument, and removes the app's variables (and `GH_TOKEN`, which only gh gets) for what it
+  starts), and smoke-node (matrix: setup-node
+  22.13.0 = the `engines` minimum on ubuntu-24.04, a test keeps them equal; apt `nodejs` on ubuntu-26.04, run as
+  `/usr/bin/node`; `scripts/ci/smoke-node.sh [--node <node>] <archive> <work-dir> <port>`: `sha256sum -c`, every entry
+  0/0 below `lyren-plan-<version>/`, no `.`/`..`, no `*.map`, has server.mjs and web/index.html, `tar -xzf
+  --no-same-owner`, `help` = version, serve with `env -i` PATH/DATA_DIR/HOST=127.0.0.1/PORT from another cwd,
+  `/api/health` with that version, `/` text/html + its script, setup code in the log, `backup backup.tar` while
+  running with `tar -tf` listing `lyren-backup.json` and `directory.db`, SIGTERM → exit 0, `Received SIGTERM`, port
+  closed, no `-wal`; `restore backup.tar` ("Staged the restore of the backup set made …", `.restore-pending/READY`),
+  the next start logs "Restored the backup set made … The data it replaced was moved to backups/before-restore-…/."
+  and leaves no `.restore-pending`, the old `lyren.db` in `backups/before-restore-*/`; then the upgrade check (design §9.9) with the previous release's archive
+  (`SMOKE_PREVIOUS_RELEASE`, else `gh release download` as above, of the newest release with a
+  `lyren-plan-*-node.tar.gz`): it sets up an account by username, a project UPG
+  and the task UPG-1 (`SETUP_TOKEN` given) and is stopped, leaving `lyren.db` alone; this build's first start logs
+  the upgrade line naming `spaces/<id>.db` and the `lyren-v1-before-upgrade-*.db` snapshot, both exist, the old
+  username and password sign in, `/api/s/<id>/projects` has UPG and `…/tasks/ref/UPG-1` the task; the previous
+  release then refuses the data (exit ≠ 0, "is newer than this build supports", within 30 s) and leaves `lyren.db`
+  and the space file unchanged (sha256). A previous release whose setup wants an email (one with spaces) skips the check
+  with a notice. Both workflow jobs get `GH_TOKEN` (the read-only token) and `GH_REPO`; refuses a used or reserved
+  port (8080, 43770–43779) and a work dir that is not new/empty; kills the server on failure) → release (contents: write;
+  `scripts/ci/publish-release.sh`: checks the three .sha256 files (exe, linux binary, Node.js archive), writes
+  SHA256SUMS (three lines), seven assets, `gh release create --verify-tag
   --generate-notes` with a notes header, prerelease when the version has `-`; a draft for the tag by
   github-actions[bot] is deleted first, any other draft stops it; a published release is never changed: same asset
   names and SHA-256 digests → success, else an error; replacing one = delete the release, keep the tag, re-run,
-  impossible with immutable releases, whose tags can't be reused). `workflow_dispatch` = build + smoke test + a
+  impossible with immutable releases, whose tags can't be reused). `workflow_dispatch` = build + smoke tests + a
   notes preview in the job summary, nothing published. Top-level permissions `contents: read`; only actions/*,
   pinned to commit SHAs; no caches; untrusted text (tag names) only through environment variables. No signing in
   CI.
@@ -972,7 +1560,8 @@ A project board "WEB board" for WEB (columns by status, swimlanes by epic) and a
   (24H2, where the manifest applies) or the copy started hidden (`LYREN_DESKTOP_RELAUNCHED=1`, removed at start) →
   `terminal`; older Windows → the parent's image (`tasklist /FI "PID eq <ppid>" /FO CSV /NH`, hidden, by
   absolute path; a failing tasklist counts as a terminal) `explorer.exe` or gone → `relaunch-hidden`, else
-  `terminal`. Other commands (`backup`, `reset-password`, `stop`, `help`; `commandMode`) without a console and
+  `terminal`. Other commands (`backup`, `restore`, `reset-password`, `promote-admin`, `policy`, `spaces`, `stop`,
+  `help`; `commandMode`) without a console and
   without redirection are `unattended` only where nobody can be at the screen: the process's own session is 0
   (services, no interactive desktop, e.g. a task that runs "whether user is logged on or not"; `tasklist /FI "PID
   eq <pid>" /FO CSV /NH`, the Session# field, asked first), or its parent's image (tasklist as above) is one of
@@ -1079,8 +1668,10 @@ A project board "WEB board" for WEB (columns by status, swimlanes by epic) and a
   (`<name>.log` for a DB not named lyren.db, see Files next to the DB; created 0700/0600 after the data folder
   exists, earlier output kept in memory, at most 256 KiB), everything written to stdout/stderr (banner, warnings,
   errors, Hono's request log with LOG_REQUESTS) plus tray events, as plain text: ANSI escape sequences (Hono
-  colours the status) are removed and the setup code of a first start is written as `[not in the log]`
-  (`redact`; the terminal still shows it); each line prefixed with local `YYYY-MM-DD HH:MM:SS `; first line "Lyren Plan <version> started
+  colours the status) are removed, and the setup code of a first start (`redact`) and the token of every link that
+  carries one in its fragment (`#t=<token>`, also percent-encoded `%23t%3D<token>`; design §9.7) are written as
+  `[not in the log]` (the terminal still shows them); a line is written once it is complete (what is left without a
+  line break at close or exit), so a secret printed in pieces is found too; each line prefixed with local `YYYY-MM-DD HH:MM:SS `; first line "Lyren Plan <version> started
   (<mode> mode, process <pid>, Windows build <n>)". At 1 MiB it is renamed to `lyren-plan.1.log` (replacing it;
   if that fails the file starts over) and a new one starts. Writing never throws. Besides an unattended command
   (Modes), which appends to it (each write at the end of the file), only the run that holds the
@@ -1096,21 +1687,22 @@ A project board "WEB board" for WEB (columns by status, swimlanes by epic) and a
   true): `click:<id>` runs that menu item's own Click handler (no synthetic input), `describe` logs the menu;
   `LYREN_TEST_POWERSHELL_CLM=1` prefixes the bootstrap with `$ExecutionContext.SessionState.LanguageMode =
   'ConstrainedLanguage'` (Windows PowerShell 5.1 ignores `__PSLockdownPolicy` in a process environment).
-- **In-app guidance** (`routes/desktop.ts`): only the desktop app passes `Deps.desktop` to `createApp`, and
-  only then do responses gain a field (the Node build's and Docker's stay byte-identical, no `desktop` key):
+- **In-app guidance** (`runtime/node/desktop.ts`): only the desktop app passes `desktop` to `openNodeStack` (which
+  hands the directory app `DirectoryDeps.desktop`), and only then do responses gain a field (the Node build's and
+  Docker's stay byte-identical, no `desktop` key):
   `GET /api/auth/status` (public) adds `desktop: DesktopAppDTO` `{ exe, windows }` (the program's file name,
   never a path), plus `stopMode: 'tray' | 'terminal'` while the icon is in use (read per response; absent for a
-  console window, Linux and macOS, so their responses are unchanged); `GET /api/bootstrap` (signed in) adds `desktop: DesktopDataDTO` (also `dataDir`, `dbPath`
+  console window, Linux and macOS, so their responses are unchanged); for instance admins it also adds `desktopData: DesktopDataDTO` (also `dataDir`, `dbPath`
   when DB_PATH makes the database anything but `<dataDir>/lyren.db`, another folder or another name, else null
   (`separateDbPath`, compared without case on Windows; also the banner's "Database:" line), `customDataDir`
-  when it is not the per-user default, `exeFolder`, null from source). LoginPage (`PasswordResetHint`) and Settings → Data (`SelfHostingNotes`, card "Data
+  when it is not the per-user default, `exeFolder`, null from source). LoginPage (`PasswordResetHint`) and Administration → Overview (`SelfHostingNotes`, card "Data
   folder and commands") then show the app's commands instead of `node dist/server.mjs`, Docker and cron:
   Command Prompt in the program's folder with the file name always quoted (`"<exe>" reset-password <user>`,
-  `"<exe>" backup "%USERPROFILE%\Documents\Lyren Plan backups\lyren-<date>.db"`, `--db-path "<dbPath>"`
+  `"<exe>" backup "%USERPROFILE%\Documents\Lyren Plan backups\lyren-<date>.tar"`, `--db-path "<dbPath>"`
   appended when `dbPath` is set, else `--data-dir "<dir>"` when `customDataDir`, since a Command Prompt opened
   later lacks the app's DATA_DIR/DB_PATH; a trailing backslash doubled); when the file name or that option's value
   contains a `%` (`commandShell`, see `stop`) every command is for Windows PowerShell instead (`& '.\<exe>' …`,
-  values `psQuote`d with a trailing backslash doubled where 5.1 needs it (`ps51ArgText`, see `stop`), the backup file `"$env:USERPROFILE\Documents\Lyren Plan backups\lyren-<date>.db"`; "run in
+  values `psQuote`d with a trailing backslash doubled where 5.1 needs it (`ps51ArgText`, see `stop`), the backup file `"$env:USERPROFILE\Documents\Lyren Plan backups\lyren-<date>.tar"`; "run in
   PowerShell", "Not in Command Prompt: it would change the % in the path of the data folder" (of the database /
   in the name of the program), "type powershell in the address bar"; the sign-in page by the file name alone); a
   Windows Task Scheduler entry (`powershell.exe` with `& '<exeFolder>\<exe>' backup (… Get-Date -Format
@@ -1119,17 +1711,92 @@ A project board "WEB board" for WEB (columns by status, swimlanes by epic) and a
   + '…')` (`psLiteral`), since Task Scheduler may expand %NAME% in a task's arguments; the option's value is
   `ps51ArgText`'d first, as PowerShell passes the expression's value to the program like any argument); or `./<exe>` in a
   terminal elsewhere; a "Stop Lyren Plan" note (how, by `stopMode`, and `"<exe>" stop` with the same option);
-  the first restore step by `stopMode` ("Close the Lyren Plan window." / "Quit Lyren Plan: right-click its icon in
-  the notification area (near the clock) and choose Quit Lyren Plan." / "Stop Lyren Plan: press Ctrl+C in its
-  window, or …"), restores replace `dbPath` (and delete its -wal/-shm) when it is set, else `lyren.db` in the data
-  folder; the lock-out line by `stopMode` too. With `stopMode` 'tray' the app shell shows a one-time note
+  the data folder's contents (`lyren.db`, `spaces\` or `<file>.spaces\` next to a `dbPath`, `backups\`); a restore:
+  `"<exe>" restore "<the backup file>"` with the same option, then the stop step by `stopMode` ("Close the Lyren Plan
+  window." / "Quit Lyren Plan: right-click its icon in the notification area (near the clock) and choose Quit Lyren
+  Plan." / "Stop Lyren Plan: press Ctrl+C in its window, or …"), then "Start Lyren Plan again."; reset-password by
+  email (or the old username), which also clears lock-outs. With `stopMode` 'tray' the app shell shows a one-time note
   (`TrayHint`, dismissed for good in localStorage `lyren.trayHint.dismissed`, not on phones): it keeps running in
   the notification area, Quit there, the ^ overflow and Settings → Personalization → Taskbar → Other system tray
   icons (maybe listed as Windows PowerShell); the setup page then says "Start Lyren Plan again to open this page
   with the code filled in." (`setupCodeHelp`; the log file leaves the code out). "Can't reach Lyren Plan" on a loopback address says
-  "start it again (it must keep running while you use it)". Desktop wording elsewhere: Settings → Account's
+  "start it again (it must keep running while you use it)". Desktop wording elsewhere: Account settings → Profile's
   Sign out card ("Your data stays in the data folder on the computer that runs Lyren Plan") and the import
-  card's error texts ("Lyren Plan" instead of "the server"). `reset-password` ends with `lockoutAdvice`
-  (cli.ts): "restart the server" (server), "close the Lyren Plan window and start Lyren Plan again" (desktop on
-  Linux / macOS), or "quit Lyren Plan (choose Quit Lyren Plan from its icon in the notification area, or close its
-  window) and start it again" (desktop on Windows: the command can't tell how the app runs).
+  card's error texts ("Lyren Plan" instead of "the server"). `reset-password` ends with `lockoutAdvice` (cli.ts),
+  the same line for every audience: "Any lock-out from failed sign-ins has been cleared." The sign-in page's hint
+  shows `reset-password <email-or-username>`.
+
+### 12.2 Cloudflare
+
+The runtime of design §10, deployed by docs/cloudflare.md's runbook. Nothing in the repository belongs to one
+deployment: no account id, route, custom domain, variable value or secret.
+
+- **The Worker** (`runtime/cloudflare/worker.ts`, Wrangler's entry; it exports only `default`, the two object
+  classes and `handleRequest`): every `/api` and `/api/*` request (`run_worker_first`); everything else is Workers
+  Static Assets (`dist/web`, `not_found_handling: single-page-application`, `web/public/_headers` with Node's CSP,
+  §10.7). It parses the configuration once per isolate (an invalid one: every `/api` request 503 "Configuration
+  error: …"), answers `GET /api/health` itself, refuses another origin than `PUBLIC_URL`'s (another host or port, or
+  plain HTTP) with 421 `wrong_host` "This Lyren Plan instance is at <PUBLIC_URL>" (the SPA then moves there; without
+  `PUBLIC_URL`, plain HTTP is refused the same way, naming `https://<host>`, except for localhost, 127.x and [::1]
+  under `wrangler dev`), and applies the gateway's guards
+  (`gateway/guards.ts`: canonical paths, CSRF, `Content-Length`, the space id and session cookie) without a Durable
+  Object request. The client's address is `CF-Connecting-IP`. It removes any client-sent `x-lyren-meta` and sends
+  its own (`TrustedMeta`, base64url JSON) with `stub.fetch` to `DIRECTORY.getByName('directory')`, or, for
+  `/api/s/<id>/…` without the `Cookie` header, to `SPACES.getByName(<id>)`; a failed `stub.fetch` is 503 "Lyren
+  Plan is temporarily unavailable. Try again in a minute.". Every `/api` answer gets the security headers and
+  `Cache-Control: no-store` (unless it has its own), and every answer over HTTPS `Strict-Transport-Security:
+  max-age=31536000`. No compression (Cloudflare
+  compresses). `LOG_REQUESTS`: `[lyren] <method> <path> <status>`.
+- **`DirectoryDO`** (one, `directory`) runs the directory app and service; **`SpaceDO`** (one per space id) the
+  space host and app, with an auth cache of `AUTH_CACHE_SECONDS` (30 s; a sign-out reaches a space within it, the
+  security revocations are pushed at once). Directory↔space calls are RPC. Migrations run in the constructor under
+  `blockConcurrencyWhile`; an error never escapes it: the object answers 503 "Configuration error: …", "This data
+  was upgraded by a newer version of Lyren Plan. Deploy that version again." or "The database could not be opened:
+  …". The directory's hourly alarm runs the maintenance (§9.8; at most 20 purges a run) and logs the orphaned-passkey
+  warning. An uninitialized `SpaceDO` writes nothing and answers 401 or 404 as a space answers someone who may not
+  open it. A Durable Object's daily-quota error answers 503 "This Lyren Plan instance has reached its daily usage
+  limit. It resets at 00:00 UTC."; a full object (`SQLITE_FULL`) 409 `quota_exceeded`.
+- **Configuration**: `core/config.ts` with the Cloudflare defaults (design Appendix B, docs/cloudflare.md
+  "Configuration"): passwords of at least 12 characters, scrypt p = 1, sessions of at most 90 days, 5 spaces per
+  account and 10 created a day, 20 members per space, imports of 4 MiB, 300,000 JSON values, 50,000 row writes and
+  60,000 a day, 20,000 row writes per space and day, 200 MiB per space. Variables come from the dashboard, `--var`
+  (`keep_vars: true` keeps both across deploys) or `.dev.vars`; the secrets `SETUP_TOKEN`, `SMTP_PASS`,
+  `RESEND_API_KEY` and `RECOVERY_TOKEN` from `wrangler secret put` or the dashboard (any variable may be a secret
+  instead; both are read alike). An empty value counts as unset. `PUBLIC_URL` must be https (http only for
+  localhost, 127.x or [::1], under `wrangler dev`). The Node-only variables are not read. `MAIL_TRANSPORT=cloudflare` needs a `send_email` binding `EMAIL`
+  (Workers Paid), not in the committed `wrangler.jsonc`: each deploy adds it (`EMAIL_BINDING` of the deploy script,
+  `wrangler-config.mjs --email-binding`, or the deployer's own copy); SMTP runs over `cloudflare:sockets` (port 25 refused).
+- **What Cloudflare lacks**: no CLI (`RECOVERY_TOKEN` and `/recover` replace `reset-password` and `promote-admin`
+  for operators), no backup download (`capabilities.backupDownload` false), no safety point before a replace import
+  (the web client requires an archive download first), no file snapshots.
+- **`wrangler.jsonc`** (repository root): `main` the TS entry, bundled by Wrangler with `tsconfig.worker.json` (the
+  `@shared` alias), `compatibility_date` 2026-10-01 (the workerd of the pinned wrangler 4.147.0; raise both together),
+  `nodejs_compat`, `build.command` `node scripts/cf/build-web.mjs`, the `DIRECTORY` and `SPACES` bindings, the
+  append-only `migrations` (`v1`, `new_sqlite_classes`), `workers_dev: true`, `preview_urls: false`, `keep_vars: true`,
+  observability on, `send_metrics: false`. `build-web.mjs` runs `npm run build:web`, except that it keeps a built
+  `dist/web/index.html` with `LYREN_PREBUILT=1`, and in a Workers Builds build (`WORKERS_CI=1`) one newer than
+  `package.json` (the Deploy button's prefilled `npm run build` built it). `.gitignore` covers `.wrangler/`, `.dev.vars*`
+  (but `.dev.vars.example`), `wrangler.local.jsonc` and `wrangler.deploy.jsonc`.
+- **Scripts**: `dev:cf` (`wrangler dev` on 127.0.0.1:8787, local state in `.wrangler/state`), `check:cf` (`wrangler
+  deploy --dry-run --outdir dist/worker`; `postcheck:cf` removes the empty `.wrangler/tmp`), `deploy:cf` (`wrangler
+  deploy`).
+- **The deploy workflow** (`.github/workflows/deploy-cloudflare.yml`; design §10.10, Appendix D 63): manual
+  (`workflow_dispatch`, `dry_run` default true), `contents: read`, concurrency `deploy-cloudflare`, only `actions/*`
+  pinned to release.yml's SHAs, no `${{ }}` in a `run:`. Job **check** runs `npm ci --ignore-scripts` and `npm run
+  check` with no secret and keeps `dist/web` (artifact `web`, 1 day); job **deploy** (environment `cloudflare`, a new
+  runner) installs with `--ignore-scripts`, downloads `dist/web`, writes the secrets file unless it is a dry run
+  (`scripts/ci/write-secrets-file.sh`: the non-empty `SETUP_TOKEN`, `SMTP_PASS`, `RESEND_API_KEY` as JSON, mode 0600,
+  never over an existing file) and runs `scripts/ci/deploy-cloudflare.sh` with `LYREN_PREBUILT=1`, then always removes
+  the file. A dry run gets no Cloudflare token. The script passes each of its 36 `VARIABLES` (every variable
+  `core/config.ts` reads on Cloudflare but the secrets and `MAIL_LOG_BODIES`) that is set as `--var NAME:value`,
+  `WORKER_NAME` as `--name=`, `WORKERS_DEV=false` and `EMAIL_BINDING` (on by itself with `MAIL_TRANSPORT=cloudflare`;
+  `false` with it stops the deploy) as `--config=wrangler.deploy.jsonc` (written by `scripts/ci/wrangler-config.mjs`
+  with `workers_dev` false and/or the `send_email` binding `EMAIL`, and removed on exit), and the secrets file as `--secrets-file=` when it lists a
+  secret (only those three; `RECOVERY_TOKEN` stops the deploy); `DRY_RUN`, `WORKERS_DEV` and `EMAIL_BINDING` take true/false
+  (1/0, yes/no, on/off) and stop on anything else; it runs `npx --no -- wrangler` and prints names, never values
+  (GitHub's log of the step shows the repository variables' values, though). The secrets are the `cloudflare`
+  environment's (deployment branch `main`, required reviewers; docs/cloudflare.md step 4B), never repository
+  secrets, which every workflow run could read.
+- **The Deploy button** (README): Cloudflare copies the repository into the deployer's account and builds it with
+  Workers Builds; it prompts for `SETUP_TOKEN`, the one active line of `.dev.vars.example`, described by
+  `package.json`'s `cloudflare.bindings`.

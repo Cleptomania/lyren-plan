@@ -6,6 +6,7 @@ import { Navigate, useNavigate, useParams } from 'react-router';
 import { LIMITS } from '@shared/constants';
 import type { EpicDTO, ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace, useSpaceId, useSpacePath } from '../../app/space';
 import { DatePicker, MilestonePicker, PropertyButton } from '../../components/domain';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
@@ -25,6 +26,7 @@ import { useStillInBootstrap } from './leaveSave';
 import { useSaveEpic } from './useHierarchyMutations';
 
 export default function EpicPage() {
+  const sid = useSpaceId();
   const { project } = useProjectContext();
   const { epicId } = useParams();
   const id = parseRouteId(epicId);
@@ -34,11 +36,14 @@ export default function EpicPage() {
   useDocumentTitle(epic ? `${epic.name} · ${project.name}` : deletingRef.current ? null : 'Epic not found');
 
   if (!epic) return deletingRef.current ? null : <EntityNotFound kind="Epic" project={project} />;
-  if (epic.projectId !== project.id) return <Navigate replace to={epicUrl(epic.projectId, epic.id)} />;
+  if (epic.projectId !== project.id) return <Navigate replace to={epicUrl(sid, epic.projectId, epic.id)} />;
   return <EpicView key={epic.id} project={project} epic={epic} deletingRef={deletingRef} />;
 }
 
 function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic: EpicDTO; deletingRef: { current: boolean } }) {
+  const sp = useSpacePath();
+  const sid = useSpaceId();
+  const { write } = useSpace().permissions;
   const navigate = useNavigate();
   const { milestoneById, milestonesByProject } = useLookups();
   const save = useSaveEpic();
@@ -53,18 +58,21 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
     const target = milestoneId === null ? undefined : milestoneById.get(milestoneId);
     void save(e, { milestoneId }, target ? `Moved to ${target.name}` : 'Removed from its milestone');
   };
-  const menu = epicMenuItems(e, {
-    edit: () => dialogs.editEpic(e),
-    setStatus: (status) => void save(e, { status }),
-    milestones,
-    setMilestone,
-    remove: () =>
-      dialogs.deleteEpic(e, {
-        onDeleting: () => (deletingRef.current = true),
-        onFailed: () => (deletingRef.current = false),
-        onDeleted: () => navigate(milestone ? milestoneUrl(project.id, milestone.id) : projectUrl(project.id), { replace: true }),
-      }),
-  }).filter((item): item is MenuItem => !!item);
+  // Viewers (design §12.9) read the epic: no menu, no editors.
+  const menu = write
+    ? epicMenuItems(e, {
+        edit: () => dialogs.editEpic(e),
+        setStatus: (status) => void save(e, { status }),
+        milestones,
+        setMilestone,
+        remove: () =>
+          dialogs.deleteEpic(e, {
+            onDeleting: () => (deletingRef.current = true),
+            onFailed: () => (deletingRef.current = false),
+            onDeleted: () => navigate(milestone ? milestoneUrl(sid, project.id, milestone.id) : projectUrl(sid, project.id), { replace: true }),
+          }),
+      }).filter((item): item is MenuItem => !!item)
+    : undefined;
 
   return (
     <Page
@@ -74,11 +82,11 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
           title={e.name}
           icon={<span aria-hidden className="size-3 rotate-45 rounded-[3px]" style={{ backgroundColor: e.color }} />}
           subtitle={`Epic · ${project.name}${milestone ? ` › ${milestone.name}` : ''}`}
-          backTo={milestone ? milestoneUrl(project.id, milestone.id) : projectUrl(project.id)}
+          backTo={milestone ? milestoneUrl(sid, project.id, milestone.id) : projectUrl(sid, project.id)}
           breadcrumbs={[
-            { label: 'Projects', to: '/projects' },
-            { label: project.name, to: projectUrl(project.id) },
-            ...(milestone ? [{ label: milestone.name, to: milestoneUrl(project.id, milestone.id) }] : []),
+            { label: 'Projects', to: sp('/projects') },
+            { label: project.name, to: projectUrl(sid, project.id) },
+            ...(milestone ? [{ label: milestone.name, to: milestoneUrl(sid, project.id, milestone.id) }] : []),
           ]}
           menu={menu}
         />
@@ -88,6 +96,7 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
         <InlineEdit
           value={e.name}
           onSave={(name) => save(e, { name })}
+          disabled={!write}
           aria-label="Epic name"
           maxLength={LIMITS.nameMax}
           className="text-xl font-semibold leading-tight text-fg md:text-2xl"
@@ -99,7 +108,7 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
                 <LifecyclePicker kind="epic" size="md" value={e.status} onChange={(status) => void save(e, { status })} subject={e.name} />
               </PropertyRow>
               <PropertyRow label="Milestone">
-                <MilestonePicker projectId={project.id} value={e.milestoneId} onChange={setMilestone} triggerProps={{ fullWidth: true }} />
+                <MilestonePicker projectId={project.id} value={e.milestoneId} onChange={setMilestone} triggerProps={{ fullWidth: true, readOnly: !write }} />
               </PropertyRow>
               <PropertyRow label="Color">
                 <Popover
@@ -108,7 +117,8 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
                   trigger={
                     <PropertyButton
                       fullWidth
-                      aria-label={`Epic color: ${e.color}. Change`}
+                      readOnly={!write}
+                      aria-label={write ? `Epic color: ${e.color}. Change` : `Epic color: ${e.color}`}
                       icon={<span className="size-3 rotate-45 rounded-[3px]" style={{ backgroundColor: e.color }} />}
                     >
                       <span className="font-mono text-xs">{e.color}</span>
@@ -134,7 +144,7 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
                   value={e.startDate}
                   max={e.dueDate ?? undefined}
                   onChange={(startDate) => void save(e, { startDate })}
-                  triggerProps={{ fullWidth: true }}
+                  triggerProps={{ fullWidth: true, readOnly: !write }}
                 />
               </PropertyRow>
               <PropertyRow label="Due date">
@@ -144,7 +154,7 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
                   closed={closed}
                   min={e.startDate ?? undefined}
                   onChange={(dueDate) => void save(e, { dueDate })}
-                  triggerProps={{ fullWidth: true }}
+                  triggerProps={{ fullWidth: true, readOnly: !write }}
                 />
               </PropertyRow>
               {e.completedAt && (
@@ -166,6 +176,7 @@ function EpicView({ project, epic: e, deletingRef }: { project: ProjectDTO; epic
                 value={e.description}
                 onSave={async (description) => (await save(e, { description })) !== undefined}
                 canSaveOnLeave={() => stillInBootstrap('epics', e.id)}
+                readOnly={!write}
               />
             </Card>
             <section aria-labelledby="epic-tasks" className="flex flex-col gap-3">

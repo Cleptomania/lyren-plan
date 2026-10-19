@@ -1,4 +1,4 @@
-// /tasks/:taskKey — a task on its own page (key = numeric id or ref like 'LYR-12').
+// /s/:spaceId/tasks/:taskKey — a task on its own page (key = numeric id or ref like 'LYR-12').
 
 import { useQueryClient } from '@tanstack/react-query';
 import { Link2, SearchX } from 'lucide-react';
@@ -9,6 +9,7 @@ import { useLookups } from '../../api/bootstrap';
 import { ApiError } from '../../api/client';
 import { qk } from '../../api/keys';
 import { useTask, useTaskByRef } from '../../api/tasks';
+import { useSpaceId, useSpacePath } from '../../app/space';
 import { useTaskActions } from '../../components/domain';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
@@ -19,14 +20,16 @@ import { copyTaskLink, detailMenuItems, TaskDetail } from './TaskDetail';
 
 export default function TaskPage() {
   const { taskKey = '' } = useParams();
+  const sid = useSpaceId();
+  const sp = useSpacePath();
   const qc = useQueryClient();
   const numeric = /^\d+$/.test(taskKey);
   const byRef = useTaskByRef(numeric ? null : taskKey);
   const id = numeric ? Number(taskKey) : byRef.data?.id;
   // The detail cache (by id) is what optimistic edits update, so render from it.
   useEffect(() => {
-    if (byRef.data && !qc.getQueryData(qk.task(byRef.data.id))) qc.setQueryData(qk.task(byRef.data.id), byRef.data);
-  }, [byRef.data, qc]);
+    if (byRef.data && !qc.getQueryData(qk.task(sid, byRef.data.id))) qc.setQueryData(qk.task(sid, byRef.data.id), byRef.data);
+  }, [byRef.data, qc, sid]);
   const detail = useTask(id);
   const task = detail.data ?? byRef.data;
   const error = numeric ? detail.error : byRef.error;
@@ -37,27 +40,27 @@ export default function TaskPage() {
   const navigate = useNavigate();
   useEffect(() => {
     if (task && !numeric && task.ref.toUpperCase() !== taskKey.toUpperCase() && detail.data) {
-      navigate(`/tasks/${task.ref}`, { replace: true });
+      navigate(sp(`/tasks/${task.ref}`), { replace: true });
     }
-  }, [task, numeric, taskKey, detail.data, navigate]);
+  }, [task, numeric, taskKey, detail.data, navigate, sp]);
 
   if (task) return <TaskPageContent task={task} />;
 
   if (error instanceof ApiError && error.status === 404) {
     return (
-      <Page width="narrow" header={<PageHeader title="Task not found" backTo="/dashboard" />}>
+      <Page width="narrow" header={<PageHeader title="Task not found" backTo={sp('/dashboard')} />}>
         <EmptyState
           icon={<SearchX />}
           title={`There is no task “${taskKey}”`}
           body="It may have been deleted, or moved to another project (which gives it a new key)."
-          action={<ButtonLink to="/dashboard">Go to the dashboard</ButtonLink>}
+          action={<ButtonLink to={sp('/dashboard')}>Go to the dashboard</ButtonLink>}
         />
       </Page>
     );
   }
   if (error) {
     return (
-      <Page width="narrow" header={<PageHeader title="Task" backTo="/dashboard" />}>
+      <Page width="narrow" header={<PageHeader title="Task" backTo={sp('/dashboard')} />}>
         <ErrorState error={error} onRetry={() => void (numeric ? detail.refetch() : byRef.refetch())} />
       </Page>
     );
@@ -73,21 +76,23 @@ export default function TaskPage() {
 }
 
 function TaskPageContent({ task }: { task: TaskDTO }) {
+  const sid = useSpaceId();
+  const sp = useSpacePath();
   const navigate = useNavigate();
   const { projectById, milestoneById, epicById } = useLookups();
   const project = projectById.get(task.projectId);
   const milestone = task.milestoneId !== null ? milestoneById.get(task.milestoneId) : undefined;
   const epic = task.epicId !== null ? epicById.get(task.epicId) : undefined;
-  const backTo = project ? `${projectUrl(project.id)}/tasks` : '/dashboard';
+  const backTo = project ? `${projectUrl(sid, project.id)}/tasks` : sp('/dashboard');
 
   const onDeleted = useCallback(() => navigate(backTo, { replace: true }), [navigate, backTo]);
-  const extra = useMemo(() => detailMenuItems(task), [task]);
+  const extra = useMemo(() => detailMenuItems(sid, task), [sid, task]);
   const menu = useTaskActions(task, extra, { onOpen: false, onDeleted });
 
   const breadcrumbs = [
-    project && { label: project.name, to: projectUrl(project.id) },
-    project && milestone && { label: milestone.name, to: milestoneUrl(project.id, milestone.id) },
-    project && epic && { label: epic.name, to: epicUrl(project.id, epic.id) },
+    project && { label: project.name, to: projectUrl(sid, project.id) },
+    project && milestone && { label: milestone.name, to: milestoneUrl(sid, project.id, milestone.id) },
+    project && epic && { label: epic.name, to: epicUrl(sid, project.id, epic.id) },
     { label: task.ref },
   ].filter((c): c is { label: string; to?: string } => !!c);
 
@@ -99,7 +104,7 @@ function TaskPageContent({ task }: { task: TaskDTO }) {
           title={task.ref}
           backTo={backTo}
           breadcrumbs={breadcrumbs}
-          actions={<IconButton aria-label={`Copy link to ${task.ref}`} tooltip="Copy link" icon={<Link2 />} onClick={() => copyTaskLink(task)} />}
+          actions={<IconButton aria-label={`Copy link to ${task.ref}`} tooltip="Copy link" icon={<Link2 />} onClick={() => copyTaskLink(sid, task)} />}
           menu={menu}
         />
       }

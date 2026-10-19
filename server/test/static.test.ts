@@ -172,6 +172,8 @@ const FILES: Record<string, string> = {
   '/sw.js': 'self.x = 1;',
   '/manifest.webmanifest': '{"name":"Lyren Plan"}',
   '/icons/icon-192.png': 'PNG',
+  // The Cloudflare static assets' header rules (web/public/_headers), copied into dist/web by Vite.
+  '/_headers': "/*\n  X-Frame-Options: DENY\n",
 };
 
 function sourceOf(kind: 'disk' | 'memory'): StaticSource {
@@ -225,6 +227,10 @@ describe.each(['disk', 'memory'] as const)('static semantics (%s source)', (kind
     expect((await app.request('/a%00b')).status).toBe(400);
     expect((await app.request('/api/health')).status).toBe(200);
     expect((await app.request('/', { method: 'POST' })).status).toBe(404);
+    // _headers is never served: the path is an app route like any unknown one.
+    const headers = await app.request('/_headers');
+    expect(headers.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(await headers.text()).toBe(FILES['/index.html']);
   });
 
   it('HEAD answers with the headers of GET and no body', async () => {

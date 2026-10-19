@@ -6,7 +6,11 @@
 // can't be written is just not written.
 //
 // The log is plain text for Notepad and for bug reports: colour escapes (Hono's request logger) are
-// removed, and secrets registered with redact() (the setup code) are replaced by REDACTED.
+// removed, secrets registered with redact() (the setup code) are replaced by REDACTED, and so is the
+// token of every link that carries one in its fragment (#t=<token>: invitations, password resets and
+// the like, design §9.7, §13.19), also percent-encoded (%23t%3D<token>, a link inside a query string).
+// A line is written once it is complete, so that a secret printed in two pieces is still found; what
+// is left without a line break is written at close(). The console still shows the whole line.
 //
 // captureOutput() sends everything the app prints (console.*, Hono's request logger) to the log, in
 // terminal mode also to the console as before, and keeps what went to stderr for message boxes.
@@ -21,6 +25,8 @@ export const OLD_LOG_FILE_NAME = 'lyren-plan.1.log';
 export const REDACTED = '[not in the log]';
 /** ANSI escape sequences (SGR colours and other CSI sequences). */
 const ANSI_ESCAPES = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+/** A link token in a URL fragment (base64url, §10.2): #t=<token>, or percent-encoded %23t%3D<token>. */
+const LINK_TOKENS = /((?:#|%23)t(?:=|%3D))[A-Za-z0-9_-]+/gi;
 
 /** The rotated file's name: lyren-plan.log -> lyren-plan.1.log, work.db.log -> work.db.1.log. */
 export function oldLogName(name: string): string {
@@ -29,6 +35,8 @@ export function oldLogName(name: string): string {
 export const MAX_LOG_BYTES = 1024 * 1024;
 /** Lines kept in memory before the log file is open. */
 const MAX_PENDING = 256 * 1024;
+/** The longest unfinished line held back for its line break; a longer one is written as it is. */
+const MAX_PARTIAL = 64 * 1024;
 
 /** "2026-10-15 14:03:12 " in local time. */
 export function timestamp(date: Date): string {
@@ -47,6 +55,8 @@ export class LogFile {
   private fd: number | null = null;
   private size = 0;
   private pending = '';
+  /** What was printed after the last line break, not redacted or written yet. */
+  private partial = '';
   private atLineStart = true;
   private secrets: string[] = [];
   private failed = false;
@@ -84,10 +94,30 @@ export class LogFile {
     if (secret.length >= 4 && !this.secrets.includes(secret)) this.secrets.push(secret);
   }
 
-  /** Write text as printed (lines get a time stamp when they start). */
+  /** Write text as printed (lines get a time stamp when they start), each line once it is complete. */
   write(printed: string): void {
     if (this.failed || printed === '') return;
-    let text = printed.replace(ANSI_ESCAPES, '');
+    const text = this.partial + printed;
+    const end = text.lastIndexOf('\n') + 1;
+    this.partial = text.slice(end);
+    let complete = text.slice(0, end);
+    if (this.partial.length > MAX_PARTIAL) {
+      complete += this.partial;
+      this.partial = '';
+    }
+    this.emit(complete);
+  }
+
+  /** Write what is held back without a line break (close() and note() do). */
+  flush(): void {
+    const partial = this.partial;
+    this.partial = '';
+    this.emit(partial);
+  }
+
+  private emit(printed: string): void {
+    if (this.failed || printed === '') return;
+    let text = printed.replace(ANSI_ESCAPES, '').replace(LINK_TOKENS, `$1${REDACTED}`);
     for (const secret of this.secrets) text = text.replaceAll(secret, REDACTED);
     if (text === '') return;
     let stamped = '';
@@ -105,10 +135,16 @@ export class LogFile {
 
   /** One line of its own (e.g. from the tray), not printed anywhere else. */
   note(line: string): void {
+    this.flush();
     this.write(`${this.atLineStart ? '' : '\n'}${line}\n`);
   }
 
   close(): void {
+    this.flush();
+    this.closeFile();
+  }
+
+  private closeFile(): void {
     if (this.fd === null) return;
     try {
       fs.closeSync(this.fd);
@@ -133,7 +169,7 @@ export class LogFile {
   /** lyren-plan.log -> lyren-plan.1.log, then a new lyren-plan.log; when that fails, start the file over. */
   private rotate(): void {
     const file = this.file!;
-    this.close();
+    this.closeFile();
     try {
       fs.renameSync(file, path.join(path.dirname(file), oldLogName(path.basename(file))));
       this.fd = fs.openSync(file, 'a', 0o600);
@@ -186,12 +222,16 @@ export function captureOutput(log: LogFile, { echo, keep = 8000 }: { echo: boole
   };
   const restoreOut = wrap(process.stdout, false);
   const restoreErr = wrap(process.stderr, true);
+  // A last line printed without a line break still reaches the log when the process ends.
+  const onExit = () => log.flush();
+  process.on('exit', onExit);
   return {
     stderrText: () => errText,
     allText: () => allText,
     restore: () => {
       restoreOut();
       restoreErr();
+      process.off('exit', onExit);
     },
   };
 }

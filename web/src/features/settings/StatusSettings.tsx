@@ -34,10 +34,11 @@ import {
 } from '@shared/constants';
 import { statusCreateInput } from '@shared/schemas';
 import type { StatusDTO } from '@shared/types';
-import { useCreateStatus, useDeleteStatus, useReorderStatuses, useUpdateStatus } from '../../api/admin';
+import { useCreateStatus, useDeleteStatus, useReorderStatuses, useUpdateStatus } from '../../api/spaceAdmin';
 import { useLookups } from '../../api/bootstrap';
 import { ApiError } from '../../api/client';
 import { qk } from '../../api/keys';
+import { useSpaceId } from '../../app/space';
 import { StatusIcon } from '../../components/domain';
 import {
   Button,
@@ -395,6 +396,7 @@ function CreateStatusDialog({ category, onClose }: { category: StatusCategory | 
 
 function ReassignDialog({ status, onClose }: { status: StatusDTO | null; onClose: () => void }) {
   const { statuses } = useLookups();
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const remove = useDeleteStatus();
   const [targetId, setTargetId] = useState<number | null>(null);
@@ -426,7 +428,7 @@ function ReassignDialog({ status, onClose }: { status: StatusDTO | null; onClose
         },
         onError: (err) => {
           toast.error(err);
-          void qc.invalidateQueries({ queryKey: qk.bootstrap });
+          void qc.invalidateQueries({ queryKey: qk.bootstrap(sid) });
         },
       },
     );
@@ -494,6 +496,7 @@ export default function StatusSettings() {
   const { statuses } = useLookups();
   const actions = useStatusActions();
   const remove = useDeleteStatus();
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [createFor, setCreateFor] = useState<StatusCategory | null>(null);
@@ -561,7 +564,7 @@ export default function StatusSettings() {
         onError: (err) => {
           toast.error(err);
           // Counts may be stale (e.g. a task moved to it meanwhile): refresh them.
-          void qc.invalidateQueries({ queryKey: qk.bootstrap });
+          void qc.invalidateQueries({ queryKey: qk.bootstrap(sid) });
         },
       },
     );

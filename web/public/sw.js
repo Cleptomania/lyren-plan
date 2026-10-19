@@ -5,15 +5,21 @@
 //   /api/*, non-GET, cross-origin   → not handled (always the network)
 //   navigations                      → network first; the latest index.html is cached and
 //                                      served when the network fails
-//   /assets/* (hashed, immutable)    → cache first
+//   /assets/* (hashed, immutable)    → cache first; an HTML answer is a failed load (below)
 //   other same-origin static files   → stale-while-revalidate (icons, manifest, favicon,
 //                                      theme-init.js)
 // A request that fails with nothing cached fails exactly like a plain network error.
 //
+// Cloudflare's static assets answer a missing file, a chunk an older deploy had, with index.html and
+// 200 (SPA fallback; design §10.6). Such an answer to an /assets/* request is never cached under the
+// chunk's URL, and the page gets a network error instead, so its chunk-error handling
+// (web/src/app/chunkErrors.ts) reloads once, as after any deploy that removed old chunks. The web tests
+// load this file and check that rule (web/src/app/serviceWorker.test.ts).
+//
 // Bump VERSION when changing this file's caching behaviour: old caches are deleted on
 // activate. App releases need no bump (index.html is network-first, assets are hashed).
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL_CACHE = `lyren-shell-${VERSION}`;
 const ASSET_CACHE = `lyren-assets-${VERSION}`;
 const PRECACHE = ['/', '/index.html', '/theme-init.js', '/manifest.webmanifest', '/favicon.svg'];
@@ -64,6 +70,11 @@ function isCacheable(res) {
   return res.ok && res.type === 'basic';
 }
 
+/** Whether an answer to an /assets/* request can be the asset: anything but an HTML page. */
+function isAssetResponse(res) {
+  return !(res.headers.get('content-type') || '').toLowerCase().includes('text/html');
+}
+
 async function networkFirstNavigation(req) {
   try {
     const res = await fetch(req);
@@ -88,6 +99,8 @@ async function cacheFirst(req) {
   const cached = await cache.match(req);
   if (cached) return cached;
   const res = await fetch(req);
+  // The SPA fallback's index.html for a chunk that is gone: a failed load, never cached.
+  if (!isAssetResponse(res)) return Response.error();
   if (isCacheable(res)) {
     await cache.put(req, res.clone()).catch(() => {});
     trimCache(cache, MAX_ASSET_ENTRIES);

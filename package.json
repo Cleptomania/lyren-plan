@@ -16,14 +16,28 @@
     "build:web": "vite build --config web/vite.config.ts",
     "build:server": "node scripts/build-server.mjs",
     "start": "node dist/server.mjs",
-    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.web.json",
+    "dev:cf": "wrangler dev --ip 127.0.0.1 --port 8787",
+    "deploy:cf": "wrangler deploy",
+    "check:cf": "wrangler deploy --dry-run --outdir dist/worker",
+    "postcheck:cf": "node scripts/cf/clean-tmp.mjs",
+    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.web.json && tsc -p tsconfig.worker.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run test && npm run build",
     "package:win": "node scripts/package.mjs --target win-x64",
-    "package:linux": "node scripts/package.mjs --target linux-x64"
+    "package:linux": "node scripts/package.mjs --target linux-x64",
+    "package:node": "node scripts/pack-node.mjs"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SETUP_TOKEN": {
+        "description": "First-run setup code for the first admin account. Choose a long random value, or leave it empty and find the generated code in the Worker's logs."
+      }
+    }
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.3.6",
+    "@cloudflare/workers-types": "5.20261001.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.19.0",
     "@types/react": "^19.3.0",
@@ -36,7 +50,8 @@
     "tsx": "^4.23.15",
     "typescript": "~5.9",
     "vite": "^7.3.6",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "wrangler": "4.147.0"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -44,10 +59,12 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@floating-ui/react": "^0.27.20",
     "@hono/node-server": "^1.19.17",
+    "@simplewebauthn/browser": "14.0.0",
+    "@simplewebauthn/server": "14.0.3",
     "@tanstack/react-query": "^5.104.0",
     "clsx": "^2.1.1",
     "fractional-indexing": "^3.4.0",
-    "hono": "^4.13.9",
+    "hono": "4.13.9",
     "lucide-react": "^0.577.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -55,5 +72,22 @@
     "react-router": "^7.18.4",
     "remark-gfm": "^4.0.1",
     "zod": "^4.6.5"
+  },
+  "overrides": {
+    "@peculiar/asn1-android": "2.10.0",
+    "@peculiar/asn1-csr": "2.10.0",
+    "@peculiar/asn1-rsa": "2.10.0",
+    "@peculiar/asn1-cms": "2.10.0",
+    "@peculiar/asn1-schema": "2.10.0",
+    "@peculiar/asn1-pkcs9": "2.10.0",
+    "@peculiar/asn1-ecc": "2.10.0",
+    "@peculiar/asn1-x509-attr": "2.10.0",
+    "@peculiar/asn1-pfx": "2.10.0",
+    "@peculiar/asn1-pkcs8": "2.10.0",
+    "@peculiar/asn1-asym-key": "2.10.0",
+    "@peculiar/asn1-x509": "2.10.0",
+    "@peculiar/asn1-x509-post-quantum": "2.10.0",
+    "@peculiar/x509": "2.1.0",
+    "asn1js": "3.0.10"
   }
 }

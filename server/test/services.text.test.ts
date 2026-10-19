@@ -4,7 +4,7 @@ import { duplicateBoardName } from '../src/routes/boards';
 import { commentExcerpt } from '../src/services/activity';
 import { copyTitle } from '../src/services/taskMutations';
 import { truncateText } from '../src/services/text';
-import { createTestContext } from './helpers';
+import { createSpaceHarness } from './support/spaceHarness';
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
@@ -38,8 +38,8 @@ describe('truncateText', () => {
 
 describe('API: truncated snapshots keep whole characters', () => {
   it('duplicate titles and comment / work-log excerpts', async () => {
-    const ctx = createTestContext();
-    const { client } = await ctx.signedIn();
+    const space = createSpaceHarness();
+    const { client } = space.owner;
     const project = (await client.post<{ id: number }>('/api/projects', { name: 'Emoji', key: 'EMO' })).body;
     const task = await client.post<{ id: number }>('/api/tasks', { projectId: project.id, title: 'ab' + '😀'.repeat(249) });
     expect(task.status).toBe(201);
@@ -48,7 +48,7 @@ describe('API: truncated snapshots keep whole characters', () => {
     expect(copy.status).toBe(201);
     expect(copy.body.title).not.toContain('�');
     expect(copy.body.title).toMatch(/😀 \(copy\)$/);
-    const stored = ctx.db.get<{ title: string }>('SELECT title FROM tasks WHERE id = :id', { id: copy.body.id })!.title;
+    const stored = space.db.get<{ title: string }>('SELECT title FROM tasks WHERE id = :id', { id: copy.body.id })!.title;
     expect(stored).toBe(copy.body.title);
 
     expect((await client.post(`/api/tasks/${task.body.id}/comments`, { body: 'x' + '😀'.repeat(120) })).status).toBe(201);

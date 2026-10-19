@@ -1,16 +1,19 @@
 // One activity entry rendered as a sentence (SPEC §9.1; used by ActivityFeed and the dashboard):
 // actor avatar, "Alex changed status from Todo → In Progress", the task (link that opens the
-// drawer; plain text once deleted), the project and a relative time.
+// drawer; plain text once deleted), the project and a relative time; an imported entry says who
+// imported it (ImportedNote, design §8.6).
 
 import { clsx } from 'clsx';
 import type { MouseEvent } from 'react';
 import { Link } from 'react-router';
 import type { ActivityDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpaceId } from '../../app/space';
 import { TaskRef, UserAvatar } from '../../components/domain';
 import { ColorDot } from '../../components/ui';
 import { projectUrl, taskPageUrl, useOpenTask } from '../../lib/taskLinks';
 import { activityDetail, activityPhrases, activityTask, actorName, joinList } from './activityText';
+import { ImportedNote } from './ImportedNote';
 import { RelativeTime } from './RelativeTime';
 
 export interface ActivityItemProps {
@@ -29,6 +32,7 @@ function isPlainClick(e: MouseEvent): boolean {
 }
 
 export function ActivityItem({ entry, compact = false, showTask = true, showProject = true }: ActivityItemProps) {
+  const sid = useSpaceId();
   const lookups = useLookups();
   const openTask = useOpenTask();
   const sentence = joinList(activityPhrases(entry, lookups));
@@ -46,7 +50,7 @@ export function ActivityItem({ entry, compact = false, showTask = true, showProj
   const taskNode =
     task && task.id !== null ? (
       <a
-        href={taskPageUrl({ id: task.id, ref: task.ref ?? undefined })}
+        href={taskPageUrl(sid, { id: task.id, ref: task.ref ?? undefined })}
         onClick={(e) => {
           if (!isPlainClick(e)) return;
           e.preventDefault();
@@ -65,7 +69,7 @@ export function ActivityItem({ entry, compact = false, showTask = true, showProj
 
   const projectNode = project && (
     <Link
-      to={projectUrl(project.id)}
+      to={projectUrl(sid, project.id)}
       className="-my-1 inline-flex min-h-8 min-w-0 items-center gap-1.5 rounded py-1 hover:text-fg hover:underline pointer-coarse:min-h-10"
     >
       <ColorDot color={project.color} square size="sm" />
@@ -89,6 +93,7 @@ export function ActivityItem({ entry, compact = false, showTask = true, showProj
           <span className="font-medium">{actorName(entry)}</span> <span className="text-fg-muted">{sentence}</span>
         </p>
         {detail && <p className="mt-1 line-clamp-2 break-words border-l-2 border-border pl-2 text-[13px] text-fg-muted">{detail}</p>}
+        {!compact && <ImportedNote entry={{ author: entry.actor, importedBy: entry.importedBy, importedAt: entry.importedAt }} className="mt-1" />}
         {meta}
       </div>
     </div>

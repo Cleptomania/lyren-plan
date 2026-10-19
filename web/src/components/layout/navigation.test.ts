@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskKey } from '../../api/tasks';
-import { createTaskDefaults, mobileTabForPath, taskKeyForLocation, type CreateDefaultsLookups } from './navigation';
+import { createTaskDefaults, mobileTabForPath, spaceChoices, switchSpacePath, taskKeyForLocation, type CreateDefaultsLookups } from './navigation';
 
 const lookups: CreateDefaultsLookups = {
   projectById: new Map([
@@ -18,7 +18,10 @@ const lookups: CreateDefaultsLookups = {
   ]),
 };
 
-const at = (pathname: string, search = '') => createTaskDefaults({ pathname, search }, lookups);
+// Pages of a space are under /s/<spaceId>/.
+const SPACE = '7k2m9q4w8x1c3v5b';
+const page = (path: string) => `/s/${SPACE}${path}`;
+const at = (pathname: string, search = '') => createTaskDefaults({ pathname: page(pathname), search }, lookups);
 
 describe('createTaskDefaults', () => {
   it('uses the project of project pages', () => {
@@ -58,7 +61,7 @@ describe('createTaskDefaults', () => {
         return 'id' in key ? tasks.get(key.id) : key.ref === 'WEB-7' ? tasks.get(41) : undefined;
       },
     };
-    const on = (pathname: string, search = '') => createTaskDefaults({ pathname, search }, withTasks);
+    const on = (pathname: string, search = '') => createTaskDefaults({ pathname: page(pathname), search }, withTasks);
 
     it("uses the task page's project and epic, by id or by ref", () => {
       expect(on('/tasks/41')).toEqual({ projectId: 2, epicId: 20 });
@@ -88,27 +91,62 @@ describe('createTaskDefaults', () => {
 
 describe('taskKeyForLocation', () => {
   it('reads the drawer param first, then a task page key', () => {
-    expect(taskKeyForLocation({ pathname: '/boards/5', search: '?task=12' })).toEqual({ id: 12 });
-    expect(taskKeyForLocation({ pathname: '/tasks/WEB-3', search: '?task=12' })).toEqual({ id: 12 });
-    expect(taskKeyForLocation({ pathname: '/tasks/18' })).toEqual({ id: 18 });
-    expect(taskKeyForLocation({ pathname: '/tasks/web-3' })).toEqual({ ref: 'WEB-3' });
+    expect(taskKeyForLocation({ pathname: page('/boards/5'), search: '?task=12' })).toEqual({ id: 12 });
+    expect(taskKeyForLocation({ pathname: page('/tasks/WEB-3'), search: '?task=12' })).toEqual({ id: 12 });
+    expect(taskKeyForLocation({ pathname: page('/tasks/18') })).toEqual({ id: 18 });
+    expect(taskKeyForLocation({ pathname: page('/tasks/web-3') })).toEqual({ ref: 'WEB-3' });
   });
   it('ignores invalid drawer ids and other pages', () => {
     for (const search of ['?task=0', '?task=-3', '?task=1.5', '?task=abc', '?task=1e3', '?task=', '']) {
-      expect(taskKeyForLocation({ pathname: '/dashboard', search })).toBeNull();
+      expect(taskKeyForLocation({ pathname: page('/dashboard'), search })).toBeNull();
     }
-    expect(taskKeyForLocation({ pathname: '/tasks' })).toBeNull();
-    expect(taskKeyForLocation({ pathname: '/projects/1/tasks' })).toBeNull();
+    expect(taskKeyForLocation({ pathname: page('/tasks') })).toBeNull();
+    expect(taskKeyForLocation({ pathname: page('/projects/1/tasks') })).toBeNull();
   });
 });
 
 describe('mobileTabForPath', () => {
-  it('maps sections to tabs', () => {
-    expect(mobileTabForPath('/')).toBe('home');
-    expect(mobileTabForPath('/dashboard')).toBe('home');
-    expect(mobileTabForPath('/projects/3/board')).toBe('projects');
-    expect(mobileTabForPath('/boards')).toBe('boards');
-    expect(mobileTabForPath('/settings/tags')).toBe('more');
-    expect(mobileTabForPath('/tasks/WEB-1')).toBeNull();
+  it('maps sections of a space to tabs', () => {
+    expect(mobileTabForPath(`/s/${SPACE}`)).toBe('home');
+    expect(mobileTabForPath(page('/'))).toBe('home');
+    expect(mobileTabForPath(page('/dashboard'))).toBe('home');
+    expect(mobileTabForPath(page('/projects/3/board'))).toBe('projects');
+    expect(mobileTabForPath(page('/boards'))).toBe('boards');
+    expect(mobileTabForPath(page('/settings/tags'))).toBe('more');
+    expect(mobileTabForPath(page('/tasks/WEB-1'))).toBeNull();
+  });
+  it('has no tab outside a space, nor for paths without the space prefix', () => {
+    for (const path of ['/', '/spaces', '/settings', '/admin', '/dashboard', '/s/not-a-space/dashboard']) expect(mobileTabForPath(path), path).toBeNull();
+  });
+});
+
+describe('the patterns need the space prefix', () => {
+  it('an unprefixed path is no page of a space', () => {
+    expect(createTaskDefaults({ pathname: '/projects/1' }, lookups)).toEqual({});
+    expect(taskKeyForLocation({ pathname: '/tasks/18' })).toBeNull();
+  });
+});
+
+describe('the space switcher', () => {
+  const OTHER = '9q2w4e6r8t1y3v5b';
+  const IMPORTING = '2b4n6m8k1j3h5g7f';
+  const spaces = [
+    { id: SPACE, name: 'Team', role: 'owner' as const, status: 'active' as const },
+    { id: OTHER, name: 'Home', role: 'viewer' as const, status: 'active' as const },
+    { id: IMPORTING, name: 'Old', role: 'owner' as const, status: 'importing' as const },
+  ];
+
+  it('lists the account’s spaces in order, the current one marked, without spaces still being imported', () => {
+    expect(spaceChoices(spaces, OTHER)).toEqual([
+      { id: SPACE, name: 'Team', role: 'owner', current: false },
+      { id: OTHER, name: 'Home', role: 'viewer', current: true },
+    ]);
+    expect(spaceChoices(spaces, null).some((s) => s.current)).toBe(false);
+    expect(spaceChoices([], SPACE)).toEqual([]);
+  });
+
+  it('switching opens the space’s home', () => {
+    expect(switchSpacePath(OTHER)).toBe(`/s/${OTHER}/`);
+    expect(mobileTabForPath(switchSpacePath(OTHER))).toBe('home');
   });
 });

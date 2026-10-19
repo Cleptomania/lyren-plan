@@ -11,6 +11,7 @@ import { taskCreateInput, type TaskCreateInput } from '@shared/schemas';
 import type { TaskDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
 import { useCreateTask } from '../../api/tasks';
+import { useSpaceId, useSpacePath } from '../../app/space';
 import {
   DatePicker,
   EpicPicker,
@@ -37,6 +38,7 @@ import {
   zodFieldErrors,
   type FieldErrors,
 } from '../../components/ui';
+import { spaceKey } from '../../lib/spaceStorage';
 import { useOpenTask } from '../../lib/taskLinks';
 import {
   draftHasContent,
@@ -49,7 +51,8 @@ import {
 } from './createDraft';
 import { readLastProjectId, readSessionJson, writeLastProjectId, writeSessionJson } from './taskHelpers';
 
-const DRAFT_KEY = 'lyren.createTaskDraft';
+/** The space's unsent draft (sessionStorage). */
+const draftKey = (spaceId: string) => spaceKey(spaceId, 'createTaskDraft');
 
 export interface TaskCreateDialogProps {
   open: boolean;
@@ -59,6 +62,7 @@ export interface TaskCreateDialogProps {
 }
 
 export default function TaskCreateDialog({ open, defaults, onClose }: TaskCreateDialogProps) {
+  const sid = useSpaceId();
   const lookups = useLookups();
   const confirm = useConfirm();
   const openTask = useOpenTask();
@@ -81,11 +85,11 @@ export default function TaskCreateDialog({ open, defaults, onClose }: TaskCreate
   // An unsent draft (same browser session) wins over the prefill, unless the caller passed
   // a title of its own (e.g. "Create task …" from the command palette).
   const [{ draft: startDraft, restored }] = useState(() => {
-    const stored = parseStoredDraft(readSessionJson(DRAFT_KEY));
+    const stored = parseStoredDraft(readSessionJson(draftKey(sid)));
     if (stored && draftHasContent(stored) && !defaults.title?.trim()) {
-      return { draft: sanitizeDraft(stored, draftLookups, readLastProjectId()), restored: true };
+      return { draft: sanitizeDraft(stored, draftLookups, readLastProjectId(sid)), restored: true };
     }
-    return { draft: initialDraft(defaults, draftLookups, readLastProjectId()), restored: false };
+    return { draft: initialDraft(defaults, draftLookups, readLastProjectId(sid)), restored: false };
   });
   const [draft, setDraft] = useState<CreateDraft>(startDraft);
   const [showRestored, setShowRestored] = useState(restored);
@@ -95,8 +99,8 @@ export default function TaskCreateDialog({ open, defaults, onClose }: TaskCreate
   const dirty = draftHasContent(draft);
 
   useEffect(() => {
-    writeSessionJson(DRAFT_KEY, draftHasContent(draft) ? draft : null);
-  }, [draft]);
+    writeSessionJson(draftKey(sid), draftHasContent(draft) ? draft : null);
+  }, [sid, draft]);
 
   const update = (patch: Partial<CreateDraft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -108,7 +112,7 @@ export default function TaskCreateDialog({ open, defaults, onClose }: TaskCreate
   };
 
   const discard = () => {
-    writeSessionJson(DRAFT_KEY, null);
+    writeSessionJson(draftKey(sid), null);
     onClose();
   };
 
@@ -137,14 +141,14 @@ export default function TaskCreateDialog({ open, defaults, onClose }: TaskCreate
     }
     submitting.current = true;
     const onCreated = (task: TaskDTO) => {
-      writeLastProjectId(task.projectId);
+      writeLastProjectId(sid, task.projectId);
       toast.success(`Created ${task.ref}`, { action: { label: 'Open', onClick: () => openTask(task.id) } });
       if (!createAnother) return discard();
       // Keep the project and epic for the next one.
       setDraft({ ...initialDraft(defaults, draftLookups, task.projectId), projectId: draft.projectId, epicId: draft.epicId });
       setShowDescription(false);
       setErrors({});
-      writeSessionJson(DRAFT_KEY, null);
+      writeSessionJson(draftKey(sid), null);
       requestAnimationFrame(() => titleRef.current?.focus());
     };
     create
@@ -215,7 +219,7 @@ export default function TaskCreateDialog({ open, defaults, onClose }: TaskCreate
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  setDraft(initialDraft(defaults, draftLookups, readLastProjectId()));
+                  setDraft(initialDraft(defaults, draftLookups, readLastProjectId(sid)));
                   setShowDescription(false);
                   setShowRestored(false);
                   titleRef.current?.focus();
@@ -306,6 +310,7 @@ export default function TaskCreateDialog({ open, defaults, onClose }: TaskCreate
 }
 
 function NoProjects() {
+  const sp = useSpacePath();
   const controls = useOverlayControls();
   const navigate = useNavigate();
   return (
@@ -315,7 +320,7 @@ function NoProjects() {
       body="Tasks live in projects. Create one, then add tasks to it."
       action={
         <ButtonLink
-          to="/projects"
+          to={sp('/projects')}
           variant="primary"
           onClick={(e) => {
             // Modified clicks (new tab / window) keep the link's own behaviour.
@@ -323,7 +328,7 @@ function NoProjects() {
             // The projects page REPLACES the dialog's own history entry (phones), so Back from
             // it returns to the page under the dialog instead of a dead same-URL entry.
             e.preventDefault();
-            navigate('/projects', { replace: controls.closeForNavigation() });
+            navigate(sp('/projects'), { replace: controls.closeForNavigation() });
           }}
         >
           Go to projects

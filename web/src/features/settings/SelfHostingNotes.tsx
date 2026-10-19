@@ -1,7 +1,9 @@
-// Settings → Data: where the data lives, command-line backups, restoring and password resets, for
-// the distribution that serves this client. The Node build and Docker get the self-hosting notes;
-// the single-file desktop app (BootstrapDTO.desktop) gets its data folder and its own commands
-// instead, with no Docker, cron or `node dist/server.mjs`.
+// Administration → Overview (design §12.12): where the data lives (the accounts' lyren.db, a database per
+// space in spaces/, the snapshots in backups/), command-line backups (backup sets, .tar), the restore
+// command and password resets by email address, for the distribution that serves this client. The Node
+// build and Docker get the self-hosting notes, with the PUBLIC_URL and mail settings; the single-file
+// desktop app (AuthStatusDTO.desktopData) gets its data folder and its own commands instead, with no
+// Docker, cron or `node dist/server.mjs`. (Design §9.7, §9.9.)
 
 import { Check, Copy } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
@@ -9,8 +11,8 @@ import type { DesktopDataDTO } from '@shared/types';
 import { IconButton, toast } from '../../components/ui';
 import {
   commandShell,
+  dataTarget,
   desktopCommand,
-  lockoutText,
   ps51ArgText,
   psQuote,
   shellName,
@@ -92,37 +94,68 @@ export const Path = ({ children }: { children: ReactNode }) => (
 // Node build and Docker
 // ---------------------------------------------------------------------------
 
-function ServerNotes({ username }: { username: string }) {
+function ServerNotes({ username, mail }: { username: string; mail: boolean }) {
   return (
     <div className="flex flex-col gap-5">
+      <Note title="Address and email">
+        <p>
+          Set <Path>PUBLIC_URL</Path> to the address people open Lyren Plan at, for example{' '}
+          <Path>https://plan.example.com</Path> (behind a reverse proxy, the proxy’s address). Links that leave the
+          browser, in emails and invitations, are built from it, and passkeys need it to be an https address.
+        </p>
+        <p>
+          {mail ? (
+            <>This server sends email through the transport <Path>MAIL_TRANSPORT</Path> names.</>
+          ) : (
+            <>
+              This server sends no email: <Path>MAIL_TRANSPORT</Path> is <Path>log</Path>, the default, which only writes a
+              line to the server’s log for each message. Forgotten passwords are then reset with the command below.
+            </>
+          )}
+        </p>
+      </Note>
       <Note title="Where your data lives">
         <p>
-          Everything is stored in <Path>lyren.db</Path> in the server’s data directory: <Path>DATA_DIR</Path> (default{' '}
-          <Path>./data</Path>, <Path>/data</Path> in Docker). Safety snapshots taken before imports and upgrades are kept in{' '}
-          <Path>DATA_DIR/backups/</Path>: the newest 10 of each kind (set <Path>SNAPSHOT_KEEP</Path> to change that, 0 keeps
-          all). Copy or rename one to keep it; your own backups there are never deleted.
+          Everything is stored in the server’s data directory: <Path>DATA_DIR</Path> (default <Path>./data</Path>,{' '}
+          <Path>/data</Path> in Docker). It holds <Path>lyren.db</Path> (the accounts and the list of spaces),{' '}
+          <Path>spaces/</Path> (one database per space) and <Path>backups/</Path>. Safety snapshots taken before imports and
+          upgrades are kept there: the newest 10 of each kind (set <Path>SNAPSHOT_KEEP</Path> to change that, 0 keeps all).
+          Copy or rename one to keep it; your own backups there are never deleted.
         </p>
       </Note>
       <Note title="Scheduled backups">
-        <p>The backup command is safe while the server is running. For example, nightly from cron with Docker:</p>
-        <Command label="cron line">{`0 3 * * * docker exec lyren-plan node dist/server.mjs backup /data/backups/lyren-$(date +\\%F).db`}</Command>
-        <p>Without Docker, run it from the app directory with the server’s data directory:</p>
-        <Command label="backup command">{'DATA_DIR=/path/to/data node dist/server.mjs backup /path/to/backups/lyren-$(date +%F).db'}</Command>
+        <p>
+          The backup command writes a backup set, one <Path>.tar</Path> file with the accounts and every space, and is safe
+          while the server is running. For example, nightly from cron with Docker:
+        </p>
+        <Command label="cron line">{`0 3 * * * docker exec lyren-plan node dist/server.mjs backup /data/backups/lyren-$(date +\\%F).tar`}</Command>
+        <p>Without Docker, run it from the app directory with the server’s data directory, as the user that owns it:</p>
+        <Command label="backup command">{'DATA_DIR=/path/to/data node dist/server.mjs backup /path/to/backups/lyren-$(date +%F).tar'}</Command>
       </Note>
       <Note title="Restore a backup">
+        <p>
+          The restore command takes a backup set, or one space’s snapshot from <Path>backups/spaces/</Path> to undo an
+          import. The server completes the restore when it starts the next time, after moving the current data to{' '}
+          <Path>backups/before-restore-&lt;time&gt;/</Path>.
+        </p>
         <ol className="list-decimal pl-5">
-          <li>Stop the server.</li>
           <li>
-            Replace <Path>lyren.db</Path> in the data directory with the backup file.
+            Run the restore command with the server’s data directory, as the user that owns it:
+            <Command label="restore command">{'DATA_DIR=/path/to/data node dist/server.mjs restore /path/to/backups/lyren-2026-10-14.tar'}</Command>
           </li>
-          <li>
-            Delete <Path>lyren.db-wal</Path> and <Path>lyren.db-shm</Path> if they exist.
-          </li>
-          <li>Start the server again.</li>
+          <li>Restart the server.</li>
         </ol>
+        <p>
+          With Docker: <Path>docker exec lyren-plan node dist/server.mjs restore /data/backups/lyren-2026-10-14.tar</Path>,
+          then <Path>docker restart lyren-plan</Path>.
+        </p>
       </Note>
       <Note title="Forgot your password?">
-        <p>Run this on the server; it prints a new random password and signs you out everywhere:</p>
+        <p>
+          Run this on the server with the account’s email address (or the username of an account from before email
+          addresses); it prints a new random password, signs you out everywhere and clears any lock-out from failed
+          sign-ins:
+        </p>
         <Command label="reset-password command">{`node dist/server.mjs reset-password ${username}`}</Command>
         <p>
           With Docker: prefix it with <Path>docker exec -it lyren-plan</Path>.
@@ -160,18 +193,18 @@ export function scheduledBackupArguments(program: string, target: CommandTarget)
   const option = targetOption(target);
   return (
     `-NoProfile -Command "& ${psLiteral(program)} backup ` +
-    `($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.db')` +
+    `($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.tar')` +
     `${option ? ` ${option.name} ${psLiteral(ps51ArgText(option.value))}` : ''}"`
   );
 }
 
-/** The backup file of the command's example, for `shell`: in the user's Documents folder, named after `today`. */
+/** The backup set of the commands' examples, for `shell`: in the user's Documents folder, named after `today`. */
 export function backupFileArg(shell: CommandShell, today: string): string {
-  const name = `Lyren Plan backups\\lyren-${today}.db`;
+  const name = `Lyren Plan backups\\lyren-${today}.tar`;
   if (shell === 'cmd') return `"%USERPROFILE%\\Documents\\${name}"`;
   // PowerShell expands $env:USERPROFILE in a double-quoted string (and nothing in the rest of it).
   if (shell === 'powershell') return `"$env:USERPROFILE\\Documents\\${name}"`;
-  return `~/lyren-${today}.db`;
+  return `~/lyren-${today}.tar`;
 }
 
 /** Why the commands are for PowerShell: what has the % that Command Prompt would change. */
@@ -183,6 +216,16 @@ function percentIn(app: DesktopDataDTO, target: CommandTarget): string {
 /** The last part of a path (Windows: after a backslash or a slash). */
 const fileName = (file: string, windows: boolean) => file.split(windows ? /[\\/]/ : '/').pop() || file;
 
+/**
+ * The folder of the spaces next to the database file `dbPath` (the server's spacesDirFor): spaces for a
+ * lyren.db (any case on Windows), else <file name>.spaces.
+ */
+export function spacesFolderName(dbPath: string | null, windows: boolean): string {
+  if (dbPath === null) return 'spaces';
+  const name = fileName(dbPath, windows);
+  return (windows ? name.toLowerCase() : name) === 'lyren.db' ? 'spaces' : `${name}.spaces`;
+}
+
 /** Joins a folder and a file name with the separator the folder uses. */
 const inFolder = (folder: string, name: string, windows: boolean) => {
   const sep = windows ? '\\' : '/';
@@ -191,16 +234,18 @@ const inFolder = (folder: string, name: string, windows: boolean) => {
 
 function DesktopNotes({ username, app, today }: { username: string; app: DesktopDataDTO; today: string }) {
   const { windows, exe, exeFolder, dbPath } = app;
-  // The commands open lyren.db in the default data folder unless told otherwise: a command prompt
-  // opened later knows nothing of the DATA_DIR or DB_PATH this copy was started with.
-  const target: CommandTarget = { dataDir: app.customDataDir ? app.dataDir : null, dbPath };
+  // The commands open lyren.db in the default data folder unless told otherwise.
+  const target = dataTarget(app);
   // Command Prompt, or PowerShell when Command Prompt would change a command (a % in it).
   const shell = commandShell(app, target);
-  const backup = desktopCommand(app, `backup ${backupFileArg(shell, today)}`, target);
+  const file = backupFileArg(shell, today);
+  const backup = desktopCommand(app, `backup ${file}`, target);
+  const restore = desktopCommand(app, `restore ${file}`, target);
   const reset = desktopCommand(app, `reset-password ${username}`, target);
   const stop = desktopCommand(app, 'stop', target);
-  // The file a restore replaces, and its write-ahead log files.
-  const dbName = dbPath === null ? 'lyren.db' : fileName(dbPath, windows);
+  const sep = windows ? '\\' : '/';
+  const spaces = `${spacesFolderName(dbPath, windows)}${sep}`;
+  const backups = `backups${sep}`;
   return (
     <div className="flex flex-col gap-5">
       <Note title="Where your data lives">
@@ -209,14 +254,16 @@ function DesktopNotes({ username, app, today }: { username: string; app: Desktop
         <p>
           {dbPath === null ? (
             <>
-              The database is <Path>lyren.db</Path>. Safety snapshots taken before imports and upgrades are kept in the{' '}
-              <Path>backups</Path> subfolder: the newest 10 of each kind.
+              It holds <Path>lyren.db</Path> (the accounts and the list of spaces), <Path>{spaces}</Path> (one database per
+              space) and <Path>{backups}</Path>, where safety snapshots taken before imports and upgrades are kept: the newest 10
+              of each kind.
             </>
           ) : (
             <>
-              The database is <Path>{dbPath}</Path> (set with <Path>DB_PATH</Path>). Safety snapshots taken before imports
-              are kept in the <Path>backups</Path> subfolder, those taken before upgrades in a <Path>backups</Path> folder
-              next to the database: the newest 10 of each kind.
+              The accounts are in <Path>{dbPath}</Path> (set with <Path>DB_PATH</Path>), the spaces in <Path>{spaces}</Path>{' '}
+              next to it. The <Path>{backups}</Path> folder next to it keeps every safety snapshot, those taken before imports
+              (a space’s in <Path>{`${backups}spaces${sep}<id>`}</Path>) and those taken before upgrades: the newest 10 of each
+              kind.
             </>
           )}{' '}
           Copy or rename one to keep it; your own backups there are never deleted. Moving, renaming or replacing the program
@@ -249,8 +296,9 @@ function DesktopNotes({ username, app, today }: { username: string; app: Desktop
       </Note>
       <Note title="Back up from the command line">
         <p>
-          Besides <span className="font-medium text-fg">Download backup</span> above, this command writes a backup. It is safe
-          while Lyren Plan is running and never overwrites a file:
+          Besides <span className="font-medium text-fg">Download backup</span> above, this command writes a backup set, one{' '}
+          <Path>.tar</Path> file with the accounts and every space. It is safe while Lyren Plan is running and never
+          overwrites a file:
         </p>
         <Command label="backup command">{backup}</Command>
         {windows && exeFolder !== null && (
@@ -265,31 +313,26 @@ function DesktopNotes({ username, app, today }: { username: string; app: Desktop
         )}
       </Note>
       <Note title="Restore a backup">
+        <p>
+          The restore command takes a backup set, or one space’s snapshot from <Path>{`${backups}spaces${sep}`}</Path> to undo
+          an import. Lyren Plan completes the restore when it starts the next time, after moving the current data to{' '}
+          <Path>{`${backups}before-restore-<time>`}</Path>.
+        </p>
         <ol className="list-decimal pl-5">
+          <li>
+            Run the restore command:
+            <Command label="restore command">{restore}</Command>
+          </li>
           <li>{stopStep(app)}</li>
-          <li>
-            {dbPath === null ? (
-              <>
-                Replace <Path>lyren.db</Path> in the data folder with the backup file (rename the backup to{' '}
-                <Path>lyren.db</Path>).
-              </>
-            ) : (
-              <>
-                Replace <Path>{dbPath}</Path> with the backup file (rename the backup to <Path>{dbName}</Path>).
-              </>
-            )}
-          </li>
-          <li>
-            Delete <Path>{`${dbName}-wal`}</Path> and <Path>{`${dbName}-shm`}</Path>
-            {dbPath === null ? '' : ' next to it'} if they exist.
-          </li>
           <li>Start Lyren Plan again.</li>
         </ol>
       </Note>
       <Note title="Forgot your password?">
-        <p>This command prints a new random password and signs you out everywhere:</p>
+        <p>
+          This command takes the account’s email address (or the username of an account from before email addresses). It
+          prints a new random password, signs you out everywhere and clears any lock-out from failed sign-ins:
+        </p>
         <Command label="reset-password command">{reset}</Command>
-        <p>{lockoutText(app)}</p>
       </Note>
     </div>
   );
@@ -302,6 +345,8 @@ function DesktopNotes({ username, app, today }: { username: string; app: Desktop
 export interface SelfHostingNotesProps {
   /** The signed-in user, for the reset-password example. */
   username: string;
+  /** InstanceInfoDTO.mail: the mail transport delivers mail. */
+  mail?: boolean;
   /** BootstrapDTO.desktop: set only by the single-file desktop app. */
   desktop: DesktopDataDTO | undefined;
   /** Today's local date (YYYY-MM-DD), for the backup file name. */
@@ -313,6 +358,6 @@ export function selfHostingTitle(desktop: DesktopDataDTO | undefined): string {
   return desktop ? 'Data folder and commands' : 'Self-hosting notes';
 }
 
-export function SelfHostingNotes({ username, desktop, today }: SelfHostingNotesProps) {
-  return desktop ? <DesktopNotes username={username} app={desktop} today={today} /> : <ServerNotes username={username} />;
+export function SelfHostingNotes({ username, mail = false, desktop, today }: SelfHostingNotesProps) {
+  return desktop ? <DesktopNotes username={username} app={desktop} today={today} /> : <ServerNotes username={username} mail={mail} />;
 }

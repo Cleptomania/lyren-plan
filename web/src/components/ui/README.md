@@ -68,7 +68,7 @@ that opened it doesn't cancel or activate anything in it.
 ```tsx
 <Button variant="primary" icon={<Plus />} loading={m.isPending} onClick={save}>Save</Button>
 <Button size="sm" hideLabelOnMobile icon={<Settings />}>Settings</Button>   // icon-only below md
-<ButtonLink to="/projects" variant="ghost">All projects</ButtonLink>          // react-router Link
+<ButtonLink to={sp('/projects')} variant="ghost">All projects</ButtonLink>  // react-router Link (sp = useSpacePath())
 <IconButton aria-label="Delete" icon={<Trash2 />} variant="ghost" />           // aria-label required; tooltip on desktop
 ```
 Props: `variant`, `size`, `icon`, `trailingIcon`, `loading` (spinner + disabled), `fullWidth`,
@@ -123,7 +123,7 @@ create.mutate(parsed.data, { onError: (err) => { setErrors(apiFieldErrors(err));
 | `Select` | Native select (OS picker on phones). `options={[{ value, label }]}` or `<option>` children, `placeholder`. Values are strings. |
 | `Checkbox` | `label`, `description`, `indeterminate`, `onCheckedChange`. Bare: pass `aria-label`. Enlarged hit area. |
 | `Switch` | `checked`, `onCheckedChange`, `label`, `description` (label → full-width settings row), `size`. |
-| `SegmentedControl` | `value`, `onChange`, `options=[{ value, label, icon? }]`, required `aria-label`, `fullWidth`, `iconOnlyOnMobile`. |
+| `SegmentedControl` | `value`, `onChange`, `options=[{ value, label, icon? }]`, required `aria-label`, `fullWidth`, `iconOnlyOnMobile`, `disabled` (read-only group; the chosen value stays visible). |
 | `DateInput` | `value: 'YYYY-MM-DD' \| null`, `onChange(value \| null)`, `min`, `max`, `clearable` (default true). Native picker. |
 | `ColorPicker` | `value`, `onChange(hex)`, `palette` (default `COLOR_PALETTE`), `allowCustom` (native color input + hex field). |
 | `InlineEdit` | Click-to-edit text: `value`, `onSave(next)` (only when changed), `aria-label`, `required`, `maxLength`, controlled `editing`/`onEditingChange` (for a "Rename" menu item), `className` for typography. Enter/blur saves, Esc cancels. |
@@ -259,6 +259,8 @@ only, never on touch; must never be the only way to get information. `placement`
 | `ListGroup` / `ListRow` | Divided card list. Row: `title`, `description`, `icon`, `meta`, `actions`, `to` (link) or `onClick`, `chevron`. |
 | `Tabs` | Local: `value`, `onChange`, `items=[{ value, label, count?, icon?, disabled? }]`, `id` (aria wiring). |
 | `RouteTabs` | NavLink tabs: `tabs=[{ to, label, end?, count?, icon? }]`. Both scroll horizontally on phones and fade the edge where tabs are scrolled out of view (`edge-fade`). |
+| `CopyField` | A value to hand on, read-only (selected on focus) with a Copy button that says "Copied": `value`, `label` (what it is, for the labels). Works on plain HTTP (`lib/clipboard.ts`). |
+| `ShareLinkField` | A link to pass on (an invitation's, a reset link): `link` as the server answered it (absolute, or a path made absolute at this origin), `shareOrigins` (`InstanceInfoDTO.shareOrigins`: a choice when there are several), `label`; warns when the link works only on this computer (`lib/shareLinks.ts`). |
 
 ### `Markdown` / `MarkdownEditor`
 ```tsx

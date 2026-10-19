@@ -6,6 +6,7 @@
 // Read stored/untrusted configs with parseBoardConfigLenient().
 
 import { z } from 'zod';
+import { findsProblem, parseBounded } from './bounded';
 import { LIMITS } from './constants';
 import { addDays, endOfWeek, type ISODate, type WeekStart } from './dates';
 import { matchesTaskFilter, type FilterContext } from './filter';
@@ -290,19 +291,42 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * schema.safeParse(value), or null when a walk of the value finds a part that fails it (findsProblem), for the
+ * parts of a config that may be large and are being read because something in them failed. The lenient reading
+ * only asks whether a part passes, so a failing part is refused at its first problem rather than described: a
+ * parse describes every problem, however small the value (a custom list of 200 empty columns makes 600 issues,
+ * each time it is tried). A valid part is walked and then parsed.
+ */
+const tryParse = <S extends z.ZodType>(schema: S, value: unknown): z.ZodSafeParseResult<z.output<S>> | null =>
+  findsProblem(schema, value) ? null : schema.safeParse(value);
+
+/**
+ * Custom columns the lenient reading of one import may try to repair, shared by all its boards (Appendix D 62):
+ * repairing a column takes several parses, and an import holds up to 10,000 boards. Once spent, an axis whose
+ * custom list needs repairs gets its defaults. A real config needs a repair only when an older version wrote it,
+ * and holds at most LIMITS.customColumnsMax columns per axis.
+ */
+export const IMPORT_REPAIR_COLUMNS = 5_000;
+
+/** What the lenient readings of one import have left to spend on repairs (parseBoardConfigLenient's budget). */
+export interface RepairBudget {
+  columns: number;
+}
+
+/**
  * Best-effort repair of a stored drop patch: resolve the two cross-field conflicts the
  * schema rejects (a tag both added and removed: adding wins; relative and fixed due date:
  * the fixed date wins, as in resolveDropPatch) and drop individually invalid fields.
  * Returns null (not a drop target) when nothing usable is left of a non-object.
  */
 function repairDropPatch(value: unknown): DropPatch | null {
-  const direct = dropPatchSchema.nullable().safeParse(value ?? null);
-  if (direct.success) return direct.data;
+  const direct = parseBounded(dropPatchSchema.nullable(), value ?? null);
+  if (direct?.success) return direct.data;
   if (!isRecord(value)) return null;
   const shape: Record<string, z.ZodType> = dropPatchSchema.shape;
   const kept: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) {
-    if (k in shape && shape[k]!.safeParse(v).success) kept[k] = v;
+    if (k in shape && parseBounded(shape[k]!, v)?.success) kept[k] = v;
   }
   if (Array.isArray(kept.addTagIds) && Array.isArray(kept.removeTagIds)) {
     const add = kept.addTagIds as number[];
@@ -310,67 +334,96 @@ function repairDropPatch(value: unknown): DropPatch | null {
     if ((kept.removeTagIds as number[]).length === 0) delete kept.removeTagIds;
   }
   if (kept.due !== undefined && kept.dueDate !== undefined) delete kept.due;
-  const retry = dropPatchSchema.safeParse(kept);
-  return retry.success ? retry.data : null;
+  const retry = parseBounded(dropPatchSchema, kept);
+  return retry?.success ? retry.data : null;
 }
 
 /** Keep a custom column whose only problems are repairable (drop patch, color); else null. */
 function repairCustomColumn(value: unknown): CustomColumn | null {
-  const direct = customColumnSchema.safeParse(value);
-  if (direct.success) return direct.data;
+  const direct = parseBounded(customColumnSchema, value);
+  if (direct?.success) return direct.data;
   if (!isRecord(value)) return null;
-  const color = customColumnSchema.shape.color.safeParse(value.color);
-  const retry = customColumnSchema.safeParse({
+  const color = parseBounded(customColumnSchema.shape.color, value.color);
+  const retry = parseBounded(customColumnSchema, {
     ...value,
-    color: color.success ? color.data : null,
+    color: color?.success ? color.data : null,
     onDrop: repairDropPatch(value.onDrop),
   });
-  return retry.success ? retry.data : null;
+  return retry?.success ? retry.data : null;
+}
+
+/**
+ * The most custom columns a repair looks at. A longer list is no config the app wrote (an axis keeps at most
+ * LIMITS.customColumnsMax), so the axis gets its defaults without a repair attempt per entry.
+ */
+const CUSTOM_REPAIR_MAX = 4 * LIMITS.customColumnsMax;
+
+/** The columns of `list` that are valid or repairable, up to one more than an axis may have. */
+function repairCustomColumns(list: unknown[]): CustomColumn[] {
+  const kept: CustomColumn[] = [];
+  for (const value of list) {
+    const column = repairCustomColumn(value);
+    // One column too many fails the axis's retry below, as any more would: the axis gets its defaults.
+    if (column !== null && kept.push(column) > LIMITS.customColumnsMax) break;
+  }
+  return kept;
 }
 
 function lenientAxis<S extends typeof columnsConfigSchema | typeof swimlanesConfigSchema>(
   schema: S,
   value: unknown,
+  groupFields: readonly string[],
+  budget: RepairBudget | undefined,
 ): z.output<S> {
-  const direct = schema.safeParse(value ?? {});
-  if (direct.success) return direct.data as z.output<S>;
+  const direct = tryParse(schema, value ?? {});
+  if (direct?.success) return direct.data as z.output<S>;
   if (!isRecord(value)) return schema.parse({}) as z.output<S>;
-  // Repair or drop individually invalid pieces, keep the rest.
+  // Repair or drop individually invalid pieces, keep the rest. Only the keys the axis has are looked at, and
+  // only its own group fields in prefs, so the work does not grow with what else an imported config holds.
   const cleaned: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value)) {
+  for (const k of Object.keys(schema.shape)) {
+    if (!Object.hasOwn(value, k)) continue;
+    const v = value[k];
     if (k === 'custom' && Array.isArray(v)) {
-      cleaned.custom = v.map(repairCustomColumn).filter((col) => col !== null);
+      if (v.length > CUSTOM_REPAIR_MAX || (budget !== undefined && v.length > budget.columns)) return schema.parse({}) as z.output<S>;
+      if (budget !== undefined) budget.columns -= v.length;
+      cleaned.custom = repairCustomColumns(v);
     } else if (k === 'prefs' && isRecord(v)) {
-      cleaned.prefs = Object.fromEntries(Object.entries(v).filter(([, p]) => groupPrefsSchema.safeParse(p).success));
+      const valid = groupFields.filter((f) => Object.hasOwn(v, f) && tryParse(groupPrefsSchema, v[f])?.success);
+      cleaned.prefs = Object.fromEntries(valid.map((f) => [f, v[f]]));
     } else {
-      const probe = schema.safeParse({ [k]: v });
-      if (probe.success) cleaned[k] = v;
+      const probe = tryParse(schema, { [k]: v });
+      if (probe?.success) cleaned[k] = v;
     }
   }
-  const retry = schema.safeParse(cleaned);
-  return (retry.success ? retry.data : schema.parse({})) as z.output<S>;
+  const retry = parseBounded(schema, cleaned);
+  return (retry?.success ? retry.data : schema.parse({})) as z.output<S>;
 }
 
 /**
  * Parse a stored/untrusted config without throwing. Invalid sections fall back to
  * their defaults individually (and invalid custom columns are dropped), so one bad
- * field never wipes the whole configuration.
+ * field never wipes the whole configuration. Every part is parsed with parseBounded
+ * or tryParse, since an imported config can be as large as the file. An import
+ * passes its RepairBudget, which bounds the repairs of all its boards together.
  */
-export function parseBoardConfigLenient(value: unknown): BoardConfig {
-  const full = boardConfigSchema.safeParse(value ?? {});
-  if (full.success) return full.data;
+export function parseBoardConfigLenient(value: unknown, budget?: RepairBudget): BoardConfig {
+  // A stored config is valid but for what an older version wrote, and parseBounded parses a small valid one at
+  // once; an imported one may be anything, and tryParse refuses most invalid ones at their first problem.
+  const full = budget === undefined ? parseBounded(boardConfigSchema, value ?? {}) : tryParse(boardConfigSchema, value ?? {});
+  if (full?.success) return full.data;
   const v = isRecord(value) ? value : {};
   const pick = <T>(schema: z.ZodType<T>, input: unknown, fallback: T): T => {
-    const r = schema.safeParse(input);
-    return r.success ? r.data : fallback;
+    const r = tryParse(schema, input);
+    return r?.success ? r.data : fallback;
   };
   return normalizeBoardConfig({
     version: 1,
     layout: pick(z.enum(['kanban', 'list']), v.layout, 'kanban'),
     filter: pick(taskFilterSchema, v.filter, DEFAULT_FILTER),
     sort: pick(taskSortSchema, v.sort, { ...DEFAULT_SORT }),
-    columns: lenientAxis(columnsConfigSchema, v.columns),
-    swimlanes: lenientAxis(swimlanesConfigSchema, v.swimlanes),
+    columns: lenientAxis(columnsConfigSchema, v.columns, COLUMN_GROUP_FIELDS, budget),
+    swimlanes: lenientAxis(swimlanesConfigSchema, v.swimlanes, SWIMLANE_GROUP_FIELDS, budget),
     card: pick(cardConfigSchema, v.card, cardConfigSchema.parse({})),
   });
 }

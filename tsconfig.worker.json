@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
+  },
+  "include": ["shared/src", "server/src", "server/test-workers"],
+  "exclude": [
+    "server/src/runtime/node",
+    "server/src/desktop",
+    "server/src/index.ts",
+    "server/src/sea.ts",
+    "server/src/cli.ts",
+    "server/src/config.ts"
+  ]
+}

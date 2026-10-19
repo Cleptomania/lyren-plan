@@ -146,6 +146,8 @@ describe('report totals', () => {
     author: null,
     createdAt: `${date}T10:00:00.000Z`,
     updatedAt: `${date}T10:00:00.000Z`,
+    importedBy: null,
+    importedAt: null,
     task: { id, ref: `P-${id}`, title: `Task ${id}`, projectId },
   });
   const items = [item(1, '2026-10-13', 30, 1), item(2, '2026-10-13', null, 2), item(3, '2026-10-12', 90, 2), item(4, '2026-10-10', 15, 1)];

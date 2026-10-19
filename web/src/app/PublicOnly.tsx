@@ -1,5 +1,6 @@
-// Wrapper for /login and /setup: redirects to the app when already signed in,
-// and between login/setup depending on whether first-run setup is needed.
+// Wrapper for /login, /setup, /signup and /forgot: redirects to the app when already signed in, and
+// between login/setup depending on whether first-run setup is needed. The pages a link opens, which
+// work signed in too, are PublicPage's.
 
 import { Suspense } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';

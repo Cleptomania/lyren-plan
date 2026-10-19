@@ -56,6 +56,7 @@ import type { BoardConfig } from '@shared/board';
 import type { BootstrapDTO, TaskDTO } from '@shared/types';
 import { qk } from '../../api/keys';
 import { applyTaskPatch, inverseTaskPatch } from '../../api/tasks';
+import { useSpace, useSpaceId } from '../../app/space';
 import { TaskCard, TaskRow, taskActions, type ExtraMenuItems } from '../../components/domain';
 import { useIsMobile } from '../../lib/hooks';
 import {
@@ -286,6 +287,7 @@ function groupLabel(groups: readonly BoardGroup[], key: string): string {
 
 export function BoardDnd({ config, model, children }: BoardDndProps) {
   const store = useMemo(() => new DragStore(), []);
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const isMobile = useIsMobile();
   const [activeTask, setActiveTask] = useState<TaskDTO | null>(null);
@@ -494,12 +496,12 @@ export function BoardDnd({ config, model, children }: BoardDndProps) {
       // offers Undo, which also restores the card's old rank, so it is back in its old place
       // among all tasks (other boards and lists included), even when it was alone in its cell.
       const full = position ? { ...patch, position } : patch;
-      const patched = applyTaskPatch(task, patch, qc.getQueryData<BootstrapDTO>(qk.bootstrap));
+      const patched = applyTaskPatch(task, patch, qc.getQueryData<BootstrapDTO>(qk.bootstrap(sid)));
       const landing = customLandingMessage(cfg, m.ctx, m.grid, patched, active, target);
       const message = landing ?? `Moved ${task.ref} to ${cellName(target)}`;
       taskActions.update(task, full, { success: withNewRef(task, message), undo: inverseTaskPatch(task, full) });
     },
-    [cellName, describeDrop, findTask, pickTarget, qc, reset, store],
+    [cellName, describeDrop, findTask, pickTarget, qc, reset, sid, store],
   );
 
   const announced = useRef('');
@@ -670,6 +672,8 @@ export interface SortableCardProps extends SortableItemProps {
  * and lets the title button (open) and the "⋯" menu (non-drag moves) stay reachable.
  */
 const SORTABLE_ATTRIBUTES = { role: 'group', roleDescription: 'Draggable task' } as const;
+/** A role that may not change tasks (design §12.9): no drags, and the card is no draggable thing. */
+const FIXED_ATTRIBUTES = { role: 'group', roleDescription: 'Task' } as const;
 
 /**
  * useSortable wired for a card / row root. The root is also the ACTIVATOR node: without one,
@@ -677,7 +681,13 @@ const SORTABLE_ATTRIBUTES = { role: 'group', roleDescription: 'Draggable task' }
  * title button picked the card up instead of opening the task.
  */
 function useSortableItem(id: string, data: CardData) {
-  const { setNodeRef, setActivatorNodeRef, listeners, attributes, isDragging } = useSortable({ id, data, attributes: SORTABLE_ATTRIBUTES });
+  const { write } = useSpace().permissions;
+  const { setNodeRef, setActivatorNodeRef, listeners, attributes, isDragging } = useSortable({
+    id,
+    data,
+    disabled: !write,
+    attributes: write ? SORTABLE_ATTRIBUTES : FIXED_ATTRIBUTES,
+  });
   const ref = useCallback(
     (el: HTMLDivElement | null) => {
       setNodeRef(el);

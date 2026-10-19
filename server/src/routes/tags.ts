@@ -5,6 +5,7 @@
 import { Hono } from 'hono';
 import { DEFAULT_TAG_COLOR } from '@shared/constants';
 import { tagCreateInput, tagMergeInput, tagUpdateInput } from '@shared/schemas';
+import { fold } from '../core/fold';
 import type { Db } from '../db';
 import type { AppEnv, Deps } from '../env';
 import { badRequest, conflict } from '../http/errors';
@@ -14,12 +15,15 @@ import { getTag, listTags, requireTag } from '../services/entities';
 import type { TagRow } from '../services/rows';
 import { nowIso } from '../services/sql';
 
-/** 409 when another tag (other than `exceptId`) already has this name, compared case-insensitively. */
+/**
+ * 409 when another tag (other than `exceptId`) already has this name, compared case-insensitively (the
+ * Unicode fold; the UNIQUE COLLATE NOCASE constraint stays as an ASCII guard).
+ */
 function assertTagNameFree(db: Db, name: string, exceptId: number | null = null): void {
-  const taken = db.get(
-    'SELECT 1 FROM tags WHERE lyren_lower(name) = lyren_lower(:name) AND id IS NOT :exceptId',
-    { name, exceptId },
-  );
+  const taken = db.get('SELECT 1 FROM tags WHERE name_fold = :fold AND id IS NOT :exceptId LIMIT 1', {
+    fold: fold(name),
+    exceptId,
+  });
   if (taken) throw conflict(`A tag named “${name}” already exists`);
 }
 
@@ -34,8 +38,8 @@ export function tagRoutes({ db }: Deps) {
       assertTagNameFree(db, input.name);
       const now = nowIso();
       const { lastInsertRowid } = db.run(
-        'INSERT INTO tags (name, color, created_at, updated_at) VALUES (:name, :color, :now, :now)',
-        { name: input.name, color: input.color ?? DEFAULT_TAG_COLOR, now },
+        'INSERT INTO tags (name, name_fold, color, created_at, updated_at) VALUES (:name, :nameFold, :color, :now, :now)',
+        { name: input.name, nameFold: fold(input.name), color: input.color ?? DEFAULT_TAG_COLOR, now },
       );
       return getTag(db, lastInsertRowid);
     });
@@ -51,9 +55,10 @@ export function tagRoutes({ db }: Deps) {
       if (next.name === row.name && next.color === row.color) return getTag(db, id);
       // A case-only rename of the tag itself ("bug" → "Bug") is allowed.
       if (next.name !== row.name) assertTagNameFree(db, next.name, id);
-      db.run('UPDATE tags SET name = :name, color = :color, updated_at = :now WHERE id = :id', {
+      db.run('UPDATE tags SET name = :name, name_fold = :nameFold, color = :color, updated_at = :now WHERE id = :id', {
         id,
         ...next,
+        nameFold: fold(next.name),
         now: nowIso(),
       });
       return getTag(db, id);

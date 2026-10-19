@@ -8,6 +8,7 @@ import { epicCreateInput, epicUpdateInput, type EpicUpdateInput } from '@shared/
 import type { EpicDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
 import { useCreateEpic, useUpdateEpic } from '../../api/projects';
+import { useSpaceId } from '../../app/space';
 import { DateField } from '../../components/domain';
 import {
   Button,
@@ -61,6 +62,7 @@ function initialState(epic: EpicDTO | undefined, defaultMilestoneId: number | nu
 const STATUS_OPTIONS = EPIC_STATUSES.map((s) => ({ value: s, label: EPIC_STATUS_LABELS[s] }));
 
 export function EpicFormDialog({ open, onClose, projectId, epic, defaultMilestoneId = null }: EpicFormDialogProps) {
+  const sid = useSpaceId();
   const navigate = useNavigate();
   const { milestonesByProject } = useLookups();
   const create = useCreateEpic();
@@ -109,7 +111,7 @@ export function EpicFormDialog({ open, onClose, projectId, epic, defaultMileston
       create.mutate(parsed.data, {
         onSuccess: (created) => {
           toast.success(`Epic “${created.name}” created`, {
-            action: { label: 'Open', onClick: () => navigate(epicUrl(created.projectId, created.id)) },
+            action: { label: 'Open', onClick: () => navigate(epicUrl(sid, created.projectId, created.id)) },
           });
           onClose();
         },

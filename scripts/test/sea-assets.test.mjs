@@ -22,10 +22,11 @@ function webDir(files) {
 }
 
 describe('collectWebAssets', () => {
-  it('every file but source maps, with request paths, asset keys and hashes', () => {
+  it('every file but source maps and _headers, with request paths, asset keys and hashes', () => {
     const dir = webDir({
       'index.html': '<title>x</title>',
       'sw.js': 'sw',
+      _headers: '/*\n  X-Frame-Options: DENY\n',
       'assets/index-abc.js': 'js',
       'assets/index-abc.js.map': '{}',
       'icons/icon-192.png': 'png',

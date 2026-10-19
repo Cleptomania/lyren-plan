@@ -28,6 +28,8 @@ function entry(action: ActivityAction, data: ActivityData = {}, extra: Partial<A
     actor: ALEX,
     createdAt: AT,
     task: null,
+    importedBy: null,
+    importedAt: null,
     ...extra,
   };
 }

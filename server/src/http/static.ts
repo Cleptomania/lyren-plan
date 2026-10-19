@@ -11,6 +11,9 @@
 // The disk source re-validates unhashed files (index.html, sw.js, ...) by mtime so a rebuild is
 // picked up without restarting the server.
 //
+// /_headers is never served: it is the Cloudflare static assets' header rules (design §10.7), which
+// Vite copies into dist/web with the rest of web/public; the path is an app route like any unknown one.
+//
 // Without a built client (no index.html: an interrupted build, only dist/server.mjs copied, a
 // wrong WEB_DIR) app routes get a short 503 page that says so instead of a bare "Not found";
 // startServer logs the folder it looked in.
@@ -49,6 +52,9 @@ const TYPES: Record<string, string> = {
 const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.webmanifest', '.svg', '.txt', '.map']);
 
 const IMMUTABLE = 'public, max-age=31536000, immutable';
+
+/** Files of the built client that are configuration for another server, not part of the site. */
+export const NOT_SERVED: ReadonlySet<string> = new Set(['/_headers']);
 
 /** One servable file. */
 export interface StaticFile {
@@ -238,7 +244,7 @@ export function staticSite(source: StaticSource | string): StaticSite {
     const rel = pathname === '/' ? '/index.html' : pathname;
     // Non-canonical spellings are never looked up: they fall through to the SPA fallback
     // (extension-less) or a 404 like any other unknown file.
-    let file = isCanonicalPath(rel) ? files.load(rel) : null;
+    let file = isCanonicalPath(rel) && !NOT_SERVED.has(rel) ? files.load(rel) : null;
     let cacheControl = rel.startsWith('/assets/') ? IMMUTABLE : 'no-cache';
     if (!file) {
       // Unknown paths without a file extension are client-side routes.

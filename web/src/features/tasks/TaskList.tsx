@@ -16,6 +16,7 @@ import type { TaskCreateInput, TaskFilter, TaskSort } from '@shared/schemas';
 import type { TaskDTO } from '@shared/types';
 import { useLookups, type Lookups } from '../../api/bootstrap';
 import { useTaskQuery } from '../../api/tasks';
+import { useSpace } from '../../app/space';
 import { EpicDot, PriorityIcon, StatusIcon, statusFraction, TaskRow, useSharedToday } from '../../components/domain';
 import { Button, ColorDot, EmptyState, ErrorState, SkeletonList } from '../../components/ui';
 import { pluralize } from '../../lib/format';
@@ -93,16 +94,19 @@ export function TaskList({
   groupBy,
   hide,
   createDefaults: createDefaultsProp,
-  selectable = false,
+  selectable: selectableProp = false,
   toolbar = true,
   emptyMessage,
 }: TaskListProps) {
   const lookups = useLookups();
+  // Viewers (design §12.9): no quick add, no bulk selection.
+  const { write } = useSpace().permissions;
+  const selectable = selectableProp && write;
   const today = useSharedToday();
   const weekStartsOn = lookups.settings.weekStartsOn;
   const openTaskId = useOpenTaskId();
   const filter = useStableValue(filterProp);
-  const createDefaults = useStableValue(createDefaultsProp);
+  const createDefaults = useStableValue(write ? createDefaultsProp : undefined);
 
   // ---- Toolbar state ---------------------------------------------------------------
   const [search, setSearch] = useState('');

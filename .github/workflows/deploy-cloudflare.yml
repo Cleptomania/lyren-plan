@@ -1,0 +1,170 @@
+# Deploys this repository to the Cloudflare account in the secrets of its "cloudflare" environment: Actions
+# -> Deploy to Cloudflare -> Run workflow. Usable unchanged by any fork. See docs/cloudflare.md, step 4B.
+#
+#   dry_run checked (default)   build and test, then `wrangler deploy --dry-run`: the Worker is bundled and
+#                               its configuration checked with the variables below; nothing is uploaded
+#                               and no Cloudflare token or app secret is used
+#   dry_run unchecked           the same, then a new version of the Worker with those variables and the
+#                               app's secrets, which are uploaded with it (so it never runs without them)
+#
+# Nothing of a deployment is committed:
+#   Settings -> Environments -> cloudflare (deployment branch main, required reviewers):
+#   secrets     CLOUDFLARE_API_TOKEN (a custom token from the "Edit Cloudflare Workers" template, for this
+#               one account), CLOUDFLARE_ACCOUNT_ID; optionally SETUP_TOKEN, SMTP_PASS, RESEND_API_KEY.
+#               Environment secrets, not repository secrets: those reach every workflow in the repository,
+#               one written by anybody who can push a branch included, with no approval.
+#   Settings -> Secrets and variables -> Actions:
+#   variables   WORKER_NAME (default lyren-plan), WORKERS_DEV (false once a custom domain works),
+#               EMAIL_BINDING (the send_email binding of MAIL_TRANSPORT=cloudflare, which adds it by itself), and
+#               the app's settings named in the deploy step below (PUBLIC_URL, MAIL_TRANSPORT, …). One that is
+#               not set is not passed: the Worker keeps what it has (keep_vars) or its default. Their values
+#               are printed in the run's log (a step's environment), which a public fork publishes.
+# RECOVERY_TOKEN is never part of it: set it by hand only while you need it (docs/cloudflare.md, "Locked out").
+#
+# Security: like release.yml, the token can only read; only GitHub's own actions, each pinned to the
+# commit of a release (the same as release.yml's); no caches; no pull_request_target; text that someone
+# else chooses reaches scripts through environment variables, never through ${{ }} in a script. No
+# third-party code shares a runner with a secret: the check job runs npm run check (Vite, its plugins,
+# the test suites) with none, and hands on only the built web client; the deploy job, on a new runner,
+# installs without install scripts, writes the app's secrets to a private file with node -e alone, and
+# runs Wrangler with the Cloudflare token but no app secret in its environment (LYREN_PREBUILT=1: no
+# Vite in that step).
+
+name: Deploy to Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only build and validate (wrangler deploy --dry-run); nothing is deployed
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Typecheck, test and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (the exact version in .nvmrc)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Typecheck, test and build (no secrets in this job)
+        run: npm run check
+
+      - name: Keep the web client
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web
+          path: dist/web
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    name: ${{ inputs.dry_run && 'Dry run' || 'Deploy' }}
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # The only job with the environment's secrets: its deployment branch (main) and required reviewers decide.
+    environment: cloudflare
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (the exact version in .nvmrc)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # Wrangler and what it bundles; no install script runs, and nothing else is run before the deploy.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Download the web client
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web
+          path: dist/web
+
+      - name: Write the app secrets to a private file
+        if: ${{ !inputs.dry_run }}
+        env:
+          SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: bash scripts/ci/write-secrets-file.sh "$RUNNER_TEMP/lyren-secrets.json"
+
+      # Every variable the app reads on Cloudflare but the secrets and MAIL_LOG_BODIES (development only),
+      # as scripts/ci/deploy-cloudflare.sh lists them (a test keeps the two lists the same).
+      - name: ${{ inputs.dry_run && 'Dry run' || 'Deploy' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ !inputs.dry_run && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ !inputs.dry_run && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
+          LYREN_PREBUILT: '1'
+          DRY_RUN: ${{ inputs.dry_run }}
+          SECRETS_FILE: ${{ runner.temp }}/lyren-secrets.json
+          WORKER_NAME: ${{ vars.WORKER_NAME }}
+          WORKERS_DEV: ${{ vars.WORKERS_DEV }}
+          EMAIL_BINDING: ${{ vars.EMAIL_BINDING }}
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+          WEBAUTHN_RP_ID: ${{ vars.WEBAUTHN_RP_ID }}
+          INSTANCE_NAME: ${{ vars.INSTANCE_NAME }}
+          SIGNUP_POLICY: ${{ vars.SIGNUP_POLICY }}
+          PASSWORD_MIN_LENGTH: ${{ vars.PASSWORD_MIN_LENGTH }}
+          PASSWORD_KDF: ${{ vars.PASSWORD_KDF }}
+          PASSWORD_SCRYPT_P: ${{ vars.PASSWORD_SCRYPT_P }}
+          SESSION_TTL_DAYS: ${{ vars.SESSION_TTL_DAYS }}
+          SESSION_MAX_DAYS: ${{ vars.SESSION_MAX_DAYS }}
+          REAUTH_MINUTES: ${{ vars.REAUTH_MINUTES }}
+          INVITATION_TTL_DAYS: ${{ vars.INVITATION_TTL_DAYS }}
+          SPACE_DELETE_GRACE_DAYS: ${{ vars.SPACE_DELETE_GRACE_DAYS }}
+          AUTH_CACHE_SECONDS: ${{ vars.AUTH_CACHE_SECONDS }}
+          MAIL_TRANSPORT: ${{ vars.MAIL_TRANSPORT }}
+          MAIL_FROM: ${{ vars.MAIL_FROM }}
+          MAIL_FROM_NAME: ${{ vars.MAIL_FROM_NAME }}
+          MAIL_REPLY_TO: ${{ vars.MAIL_REPLY_TO }}
+          MAIL_DAILY_CAP: ${{ vars.MAIL_DAILY_CAP }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_SECURITY: ${{ vars.SMTP_SECURITY }}
+          SMTP_USER: ${{ vars.SMTP_USER }}
+          SMTP_EHLO_NAME: ${{ vars.SMTP_EHLO_NAME }}
+          MAX_SPACES_PER_USER: ${{ vars.MAX_SPACES_PER_USER }}
+          SPACES_CREATED_PER_DAY: ${{ vars.SPACES_CREATED_PER_DAY }}
+          MAX_MEMBERS_PER_SPACE: ${{ vars.MAX_MEMBERS_PER_SPACE }}
+          MAX_OPEN_INVITATIONS_PER_SPACE: ${{ vars.MAX_OPEN_INVITATIONS_PER_SPACE }}
+          INVITATIONS_PER_DAY: ${{ vars.INVITATIONS_PER_DAY }}
+          BODY_LIMIT: ${{ vars.BODY_LIMIT }}
+          IMPORT_BODY_LIMIT: ${{ vars.IMPORT_BODY_LIMIT }}
+          IMPORT_MAX_JSON_VALUES: ${{ vars.IMPORT_MAX_JSON_VALUES }}
+          IMPORT_MAX_ROW_WRITES: ${{ vars.IMPORT_MAX_ROW_WRITES }}
+          IMPORT_DAILY_ROW_WRITES: ${{ vars.IMPORT_DAILY_ROW_WRITES }}
+          SPACE_DAILY_ROW_WRITES: ${{ vars.SPACE_DAILY_ROW_WRITES }}
+          SPACE_MAX_BYTES: ${{ vars.SPACE_MAX_BYTES }}
+          LOG_REQUESTS: ${{ vars.LOG_REQUESTS }}
+        run: bash scripts/ci/deploy-cloudflare.sh
+
+      - name: Remove the secrets file
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/lyren-secrets.json"

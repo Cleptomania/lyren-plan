@@ -1,6 +1,7 @@
-// Settings → Data's notes for each distribution (SelfHostingNotes), rendered to HTML without a DOM:
-// the Node build and Docker keep the self-hosting notes; the desktop app gets its data folder and
-// its own commands, without Docker, cron or `node dist/server.mjs`.
+// Administration → Overview's notes for each distribution (SelfHostingNotes, design §12.12), rendered to
+// HTML without a DOM: the Node build and Docker get the self-hosting notes (backup sets, restore,
+// reset-password by email, PUBLIC_URL and mail); the desktop app gets its data folder and its own
+// commands, without Docker, cron or `node dist/server.mjs`.
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -19,8 +20,8 @@ function textOf(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-const render = (desktop: DesktopDataDTO | undefined) =>
-  textOf(renderToStaticMarkup(createElement(SelfHostingNotes, { username: 'dana', desktop, today: '2026-10-14' })));
+const render = (desktop: DesktopDataDTO | undefined, mail = false) =>
+  textOf(renderToStaticMarkup(createElement(SelfHostingNotes, { username: 'dana@example.com', mail, desktop, today: '2026-10-14' })));
 
 const WIN: DesktopDataDTO = {
   exe: 'lyren-plan-0.1.0-win-x64.exe',
@@ -40,56 +41,78 @@ const LINUX: DesktopDataDTO = {
   exeFolder: '/home/dana/bin',
 };
 
-describe('Settings → Data notes', () => {
+describe('Administration → Overview notes', () => {
   it('Node build and Docker: data directory, cron and Docker, node dist/server.mjs', () => {
     const text = render(undefined);
     expect(selfHostingTitle(undefined)).toBe('Self-hosting notes');
     expect(text).toContain('DATA_DIR (default ./data , /data in Docker)');
-    expect(text).toContain('0 3 * * * docker exec lyren-plan node dist/server.mjs backup /data/backups/lyren-$(date +\\%F).db');
-    expect(text).toContain('Stop the server.');
-    expect(text).toContain('node dist/server.mjs reset-password dana');
+    expect(text).toContain('0 3 * * * docker exec lyren-plan node dist/server.mjs backup /data/backups/lyren-$(date +\\%F).tar');
+    expect(text).toContain('It holds lyren.db (the accounts and the list of spaces), spaces/ (one database per space) and backups/ .');
+    expect(text).toContain('DATA_DIR=/path/to/data node dist/server.mjs restore /path/to/backups/lyren-2026-10-14.tar');
+    expect(text).toContain('Restart the server.');
+    expect(text).toContain('docker exec lyren-plan node dist/server.mjs restore /data/backups/lyren-2026-10-14.tar , then docker restart lyren-plan');
+    expect(text).toContain('backups/before-restore-<time>/');
+    expect(text).toContain('node dist/server.mjs reset-password dana@example.com');
     expect(text).toContain('docker exec -it lyren-plan');
+  });
+
+  it('Node build and Docker: PUBLIC_URL, and whether this server sends email', () => {
+    const text = render(undefined);
+    expect(text).toContain('Set PUBLIC_URL to the address people open Lyren Plan at, for example https://plan.example.com');
+    expect(text).toContain('passkeys need it to be an https address');
+    expect(text).toContain('This server sends no email: MAIL_TRANSPORT is log , the default');
+    expect(text).toContain('Forgotten passwords are then reset with the command below.');
+    const mailing = render(undefined, true);
+    expect(mailing).toContain('This server sends email through the transport MAIL_TRANSPORT names.');
+    expect(mailing).not.toContain('sends no email');
   });
 
   it('desktop app on Windows: its data folder and commands, nothing about servers, Docker or cron', () => {
     const text = render(WIN);
     expect(selfHostingTitle(WIN)).toBe('Data folder and commands');
     expect(text).toContain('Everything is stored in this folder on the computer that runs Lyren Plan: C:\\Users\\dana\\AppData\\Local\\Lyren Plan');
-    expect(text).toContain('The database is lyren.db .');
+    expect(text).toContain(
+      'It holds lyren.db (the accounts and the list of spaces), spaces\\ (one database per space) and backups\\ , where safety snapshots',
+    );
     expect(text).toContain('run in Command Prompt, in the folder that holds lyren-plan-0.1.0-win-x64.exe ( C:\\Users\\dana\\Apps )');
     expect(text).toContain('type cmd in the address bar and press Enter');
     expect(text).toContain(
-      '"lyren-plan-0.1.0-win-x64.exe" backup "%USERPROFILE%\\Documents\\Lyren Plan backups\\lyren-2026-10-14.db"',
+      '"lyren-plan-0.1.0-win-x64.exe" backup "%USERPROFILE%\\Documents\\Lyren Plan backups\\lyren-2026-10-14.tar"',
     );
     expect(text).toContain('Windows Task Scheduler');
     expect(text).toContain(
-      `-NoProfile -Command "& 'C:\\Users\\dana\\Apps\\lyren-plan-0.1.0-win-x64.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.db')"`,
+      `-NoProfile -Command "& 'C:\\Users\\dana\\Apps\\lyren-plan-0.1.0-win-x64.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.tar')"`,
     );
-    expect(text).toContain('Close the Lyren Plan window.');
-    expect(text).toContain('Start Lyren Plan again.');
-    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana');
-    expect(text).toContain('close the Lyren Plan window and start Lyren Plan again');
+    expect(text).toContain(
+      'Run the restore command: "lyren-plan-0.1.0-win-x64.exe" restore "%USERPROFILE%\\Documents\\Lyren Plan backups\\lyren-2026-10-14.tar" Close the Lyren Plan window. Start Lyren Plan again.',
+    );
+    expect(text).toContain('backups\\before-restore-<time>');
+    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana@example.com');
+    expect(text).toContain('clears any lock-out from failed sign-ins');
     expect(text).not.toMatch(/docker|cron|node dist|DATA_DIR|\.\/data|server|--data-dir/i);
   });
 
   it('desktop app with its own data folder: every command passes --data-dir', () => {
     const text = render({ ...WIN, dataDir: 'D:\\Lyren', customDataDir: true });
     expect(text).toContain('Lyren Plan: D:\\Lyren');
-    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana --data-dir "D:\\Lyren"');
-    expect(text).toContain('lyren-2026-10-14.db" --data-dir "D:\\Lyren"');
-    expect(text).toContain(`+ '.db') --data-dir 'D:\\Lyren'"`);
+    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana@example.com --data-dir "D:\\Lyren"');
+    expect(text).toContain('lyren-2026-10-14.tar" --data-dir "D:\\Lyren"');
+    expect(text).toContain(`+ '.tar') --data-dir 'D:\\Lyren'"`);
   });
 
   it('desktop app with DB_PATH: names the database file, and every command and the restore use it (R6REV-1, W6-1)', () => {
     const text = render({ ...WIN, dbPath: 'E:\\db\\plan.db' });
-    expect(text).toContain('The database is E:\\db\\plan.db (set with DB_PATH ).');
+    expect(text).toContain('The accounts are in E:\\db\\plan.db (set with DB_PATH ), the spaces in plan.db.spaces\\ next to it.');
+    // Every snapshot is next to the database, the pre-import ones too (§9.5).
+    expect(text).toContain(
+      'The backups\\ folder next to it keeps every safety snapshot, those taken before imports (a space’s in backups\\spaces\\<id> ) and those taken before upgrades',
+    );
     // A Command Prompt opened later has no DB_PATH: without --db-path the commands would open
     // lyren.db in the default data folder, another database.
-    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana --db-path "E:\\db\\plan.db"');
-    expect(text).toContain('lyren-2026-10-14.db" --db-path "E:\\db\\plan.db"');
-    expect(text).toContain(`+ '.db') --db-path 'E:\\db\\plan.db'"`);
-    expect(text).toContain('Replace E:\\db\\plan.db with the backup file (rename the backup to plan.db ).');
-    expect(text).toContain('Delete plan.db-wal and plan.db-shm next to it if they exist.');
+    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana@example.com --db-path "E:\\db\\plan.db"');
+    expect(text).toContain('lyren-2026-10-14.tar" --db-path "E:\\db\\plan.db"');
+    expect(text).toContain(`+ '.tar') --db-path 'E:\\db\\plan.db'"`);
+    expect(text).toContain('restore "%USERPROFILE%\\Documents\\Lyren Plan backups\\lyren-2026-10-14.tar" --db-path "E:\\db\\plan.db"');
     expect(text).not.toMatch(/lyren\.db(?!-)/i);
     expect(text).not.toContain('--data-dir');
   });
@@ -97,16 +120,17 @@ describe('Settings → Data notes', () => {
   it('desktop app with DB_PATH in the data folder under another name: still named (W6-1)', () => {
     const dataDir = 'D:\\Lyren';
     const text = render({ ...WIN, dataDir, customDataDir: true, dbPath: 'D:\\Lyren\\plan.db' });
-    expect(text).toContain('The database is D:\\Lyren\\plan.db (set with DB_PATH ).');
-    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana --db-path "D:\\Lyren\\plan.db"');
-    expect(text).toContain('Replace D:\\Lyren\\plan.db with the backup file (rename the backup to plan.db ).');
-    expect(text).not.toContain('Replace lyren.db');
+    expect(text).toContain('The accounts are in D:\\Lyren\\plan.db (set with DB_PATH ), the spaces in plan.db.spaces\\ next to it.');
+    expect(text).toContain('"lyren-plan-0.1.0-win-x64.exe" reset-password dana@example.com --db-path "D:\\Lyren\\plan.db"');
+    expect(text).toContain('restore "%USERPROFILE%\\Documents\\Lyren Plan backups\\lyren-2026-10-14.tar" --db-path "D:\\Lyren\\plan.db"');
+    expect(text).not.toContain('lyren.db (the accounts');
   });
 
   it('desktop app on Linux with DB_PATH: --db-path for the shell, the file name from the path', () => {
     const text = render({ ...LINUX, dbPath: '/srv/lyren db/plan.db' });
-    expect(text).toContain("./lyren-plan-0.1.0-linux-x64 reset-password dana --db-path '/srv/lyren db/plan.db'");
-    expect(text).toContain('Delete plan.db-wal and plan.db-shm next to it if they exist.');
+    expect(text).toContain("./lyren-plan-0.1.0-linux-x64 reset-password dana@example.com --db-path '/srv/lyren db/plan.db'");
+    expect(text).toContain('the spaces in plan.db.spaces/ next to it.');
+    expect(text).toContain("./lyren-plan-0.1.0-linux-x64 restore ~/lyren-2026-10-14.tar --db-path '/srv/lyren db/plan.db'");
   });
 
   it('desktop app run from source: no program folder and no Task Scheduler entry', () => {
@@ -119,8 +143,8 @@ describe('Settings → Data notes', () => {
     const text = render(LINUX);
     expect(text).toContain('/home/dana/.local/share/lyren-plan');
     expect(text).toContain('run in a terminal, in the folder that holds lyren-plan-0.1.0-linux-x64 ( /home/dana/bin )');
-    expect(text).toContain('./lyren-plan-0.1.0-linux-x64 backup ~/lyren-2026-10-14.db');
-    expect(text).toContain('./lyren-plan-0.1.0-linux-x64 reset-password dana');
+    expect(text).toContain('./lyren-plan-0.1.0-linux-x64 backup ~/lyren-2026-10-14.tar');
+    expect(text).toContain('./lyren-plan-0.1.0-linux-x64 reset-password dana@example.com');
     expect(text).toContain('Close the Lyren Plan window.');
     expect(text).not.toMatch(/Command Prompt|Task Scheduler|PowerShell|cmd|docker|cron|node dist|server/i);
   });
@@ -138,14 +162,10 @@ describe('Settings → Data notes', () => {
     );
     expect(tray).toContain('"lyren-plan-0.1.0-win-x64.exe" stop');
     expect(tray).toContain('Quit Lyren Plan: right-click its icon in the notification area (near the clock) and choose Quit Lyren Plan.');
-    expect(tray).toContain(
-      'If you were locked out by too many attempts, wait 15 minutes, or quit Lyren Plan and start it again (to quit it, right-click its icon in the notification area and choose Quit Lyren Plan).',
-    );
     expect(tray).not.toMatch(/Close the Lyren Plan window|server/i);
 
     const terminal = render({ ...WIN, stopMode: 'terminal' });
     expect(terminal).toContain('Stop Lyren Plan: press Ctrl+C in its window, or right-click its icon in the notification area (near the clock) and choose Quit Lyren Plan.');
-    expect(terminal).toContain('or stop Lyren Plan (press Ctrl+C in its window, or choose Quit Lyren Plan from its icon in the notification area) and start it again.');
 
     // The stop command names the same database as the other commands.
     expect(render({ ...WIN, dataDir: 'D:\\Lyren', customDataDir: true, stopMode: 'tray' })).toContain('"lyren-plan-0.1.0-win-x64.exe" stop --data-dir "D:\\Lyren"');
@@ -154,10 +174,10 @@ describe('Settings → Data notes', () => {
 
   it('Task Scheduler arguments: PowerShell single quotes are doubled', () => {
     expect(scheduledBackupArguments("C:\\Users\\O'Neil\\lyren.exe", { dataDir: "D:\\O'Neil", dbPath: null })).toBe(
-      `-NoProfile -Command "& 'C:\\Users\\O''Neil\\lyren.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.db') --data-dir 'D:\\O''Neil'"`,
+      `-NoProfile -Command "& 'C:\\Users\\O''Neil\\lyren.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.tar') --data-dir 'D:\\O''Neil'"`,
     );
     expect(scheduledBackupArguments('C:\\a\\lyren.exe', { dataDir: null, dbPath: null })).toBe(
-      `-NoProfile -Command "& 'C:\\a\\lyren.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.db')"`,
+      `-NoProfile -Command "& 'C:\\a\\lyren.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.tar')"`,
     );
   });
 
@@ -179,9 +199,9 @@ describe('Settings → Data notes', () => {
     expect(text).toContain('Not in Command Prompt: it would change the % in the path of the data folder.');
     expect(text).toContain('To open PowerShell there, go to that folder in File Explorer, type powershell in the address bar and press Enter.');
     expect(text).toContain(`& '.\\lyren-plan-0.1.0-win-x64.exe' stop --data-dir ${dir}`);
-    expect(text).toContain(`& '.\\lyren-plan-0.1.0-win-x64.exe' reset-password dana --data-dir ${dir}`);
+    expect(text).toContain(`& '.\\lyren-plan-0.1.0-win-x64.exe' reset-password dana@example.com --data-dir ${dir}`);
     expect(text).toContain(
-      `& '.\\lyren-plan-0.1.0-win-x64.exe' backup "$env:USERPROFILE\\Documents\\Lyren Plan backups\\lyren-2026-10-14.db" --data-dir ${dir}`,
+      `& '.\\lyren-plan-0.1.0-win-x64.exe' backup "$env:USERPROFILE\\Documents\\Lyren Plan backups\\lyren-2026-10-14.tar" --data-dir ${dir}`,
     );
     // Task Scheduler gets no % at all (it may expand %NAME% in a task's arguments).
     expect(text).toContain(`--data-dir ('D:\\R&D 100' + [char]37 + 'PATH' + [char]37 + ' ^x !y (z) O''Neil’’s')"`);
@@ -191,7 +211,7 @@ describe('Settings → Data notes', () => {
     expect(render({ ...WIN, dbPath: 'E:\\100%\\plan.db' })).toContain("& '.\\lyren-plan-0.1.0-win-x64.exe' stop --db-path 'E:\\100%\\plan.db'");
     const renamed = render({ ...WIN, exe: 'Lyren 100%.exe' });
     expect(renamed).toContain('it would change the % in the name of the program.');
-    expect(renamed).toContain("& '.\\Lyren 100%.exe' reset-password dana");
+    expect(renamed).toContain("& '.\\Lyren 100%.exe' reset-password dana@example.com");
     expect(renamed).toContain(`-NoProfile -Command "& ('C:\\Users\\dana\\Apps\\Lyren 100' + [char]37 + '.exe') backup`);
     // Without a %: Command Prompt as before, even with names cmd treats specially inside quotes.
     const plain = render({ ...WIN, dataDir: "D:\\R&D ^x !y (z) O'Neil’s", customDataDir: true });
@@ -203,12 +223,12 @@ describe('Settings → Data notes', () => {
     // PowerShell evaluates the expression and passes the value on: with a space 5.1 quotes it without
     // escaping the trailing backslash, so it is doubled in the text (with the % as [char]37 as before).
     expect(scheduledBackupArguments('C:\\a\\lyren.exe', { dataDir: '\\\\nas\\Lyren 100%\\', dbPath: null })).toBe(
-      `-NoProfile -Command "& 'C:\\a\\lyren.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.db') --data-dir ('\\\\nas\\Lyren 100' + [char]37 + '\\\\')"`,
+      `-NoProfile -Command "& 'C:\\a\\lyren.exe' backup ($env:USERPROFILE + '\\Documents\\Lyren Plan backups\\lyren-' + (Get-Date -Format yyyy-MM-dd) + '.tar') --data-dir ('\\\\nas\\Lyren 100' + [char]37 + '\\\\')"`,
     );
     expect(scheduledBackupArguments('C:\\a\\lyren.exe', { dataDir: '\\\\nas\\Lyren data\\', dbPath: null })).toContain(`--data-dir '\\\\nas\\Lyren data\\\\'"`);
     // Without whitespace: as it is.
     expect(scheduledBackupArguments('C:\\a\\lyren.exe', { dataDir: '\\\\nas\\Lyren\\', dbPath: null })).toContain(`--data-dir '\\\\nas\\Lyren\\'"`);
-    // In Settings → Data.
+    // In Administration → Overview.
     const text = render({ ...WIN, dataDir: '\\\\nas\\Lyren 100%\\', customDataDir: true });
     expect(text).toContain("& '.\\lyren-plan-0.1.0-win-x64.exe' stop --data-dir '\\\\nas\\Lyren 100%\\\\'");
     expect(text).toContain(`--data-dir ('\\\\nas\\Lyren 100' + [char]37 + '\\\\')"`);
@@ -219,12 +239,12 @@ describe('Settings → Data notes', () => {
     expect(psLiteral("100%PATH%'s")).toBe("('100' + [char]37 + 'PATH' + [char]37 + '''s')");
     expect(psLiteral('%')).toBe("('' + [char]37 + '')");
     expect(psLiteral('a%%b')).not.toContain('%');
-    expect(backupFileArg('cmd', '2026-10-14')).toBe('"%USERPROFILE%\\Documents\\Lyren Plan backups\\lyren-2026-10-14.db"');
-    expect(backupFileArg('powershell', '2026-10-14')).toBe('"$env:USERPROFILE\\Documents\\Lyren Plan backups\\lyren-2026-10-14.db"');
-    expect(backupFileArg('posix', '2026-10-14')).toBe('~/lyren-2026-10-14.db');
+    expect(backupFileArg('cmd', '2026-10-14')).toBe('"%USERPROFILE%\\Documents\\Lyren Plan backups\\lyren-2026-10-14.tar"');
+    expect(backupFileArg('powershell', '2026-10-14')).toBe('"$env:USERPROFILE\\Documents\\Lyren Plan backups\\lyren-2026-10-14.tar"');
+    expect(backupFileArg('posix', '2026-10-14')).toBe('~/lyren-2026-10-14.tar');
   });
 
-  it('Settings → Account, Sign out: the server for the Node build, the data folder for the desktop app (W6-3)', () => {
+  it('Account settings → Profile, Sign out: the server for the Node build, the data folder for the desktop app (W6-3)', () => {
     expect(signOutDescription(false)).toBe('Sign out of Lyren Plan on this device. Your data stays on the server.');
     expect(signOutDescription(true)).toBe(
       'Sign out of Lyren Plan on this device. Your data stays in the data folder on the computer that runs Lyren Plan.',

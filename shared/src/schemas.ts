@@ -16,9 +16,12 @@ import {
   LIMITS,
   MILESTONE_STATUSES,
   PROJECT_STATUSES,
+  SIGNUP_POLICIES,
   STATUS_CATEGORIES,
 } from './constants';
-import { isValidISODate } from './dates';
+import { isValidISODate, type WeekStart } from './dates';
+import { emailSchema } from './email';
+import { INVITABLE_ROLES, SPACE_ROLES } from './roles';
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -36,6 +39,10 @@ export const colorSchema = z
 export const prioritySchema = z.literal([0, 1, 2, 3, 4]);
 export const statusCategorySchema = z.enum(STATUS_CATEGORIES);
 export const weekStartSchema = z.literal([0, 1]);
+/** weekStartsOn in a query string: '0' (Sunday) or '1' (Monday). */
+export const weekStartParamSchema = z.enum(['0', '1']).transform((v): WeekStart => (v === '0' ? 0 : 1));
+export const homePageSchema = z.enum(['dashboard', 'default_board']);
+export const spaceRoleSchema = z.enum(SPACE_ROLES);
 
 const nameSchema = z.string().trim().min(1, 'Required').max(LIMITS.nameMax);
 const descriptionSchema = z.string().max(LIMITS.descriptionMax);
@@ -63,8 +70,9 @@ export const usernameSchema = z
 export const passwordSchema = z.string().min(LIMITS.passwordMin, `At least ${LIMITS.passwordMin} characters`).max(LIMITS.passwordMax);
 export const displayNameSchema = z.string().trim().min(1, 'Required').max(LIMITS.displayNameMax);
 
+/** POST /api/auth/setup: the first account (an instance admin). New installs sign in by email. */
 export const setupInput = z.object({
-  username: usernameSchema,
+  email: emailSchema,
   password: passwordSchema,
   displayName: displayNameSchema,
   createSampleData: z.boolean().optional(),
@@ -73,22 +81,85 @@ export const setupInput = z.object({
   /** The client's local date; sample data is dated relative to it (default: server UTC date). */
   today: isoDateSchema.optional(),
 });
-export type SetupInput = z.infer<typeof setupInput>;
+export type SetupInput = z.input<typeof setupInput>;
 
-export const loginInput = z.object({
-  username: z.string().trim().min(1, 'Required').max(LIMITS.usernameMax),
-  password: z.string().min(1, 'Required').max(LIMITS.passwordMax),
-});
-export type LoginInput = z.infer<typeof loginInput>;
+const identifierSchema = z.string().trim().min(1, 'Required').max(LIMITS.identifierMax);
 
-export const updateMeInput = z.object({ displayName: displayNameSchema });
-export type UpdateMeInput = z.infer<typeof updateMeInput>;
+/**
+ * POST /api/auth/login: an email address or a legacy username in `identifier`. The body of clients
+ * from before the multi-user upgrade, `{ username, password }`, is accepted too (an open tab can
+ * still sign in). Parses to `{ identifier, password }`.
+ */
+export const loginInput = z
+  .object({
+    identifier: identifierSchema.optional(),
+    username: identifierSchema.optional(),
+    password: z.string().min(1, 'Required').max(LIMITS.passwordMax),
+  })
+  .refine((v) => v.identifier !== undefined || v.username !== undefined, { message: 'Required', path: ['identifier'] })
+  .transform(({ identifier, username, password }) => ({ identifier: (identifier ?? username)!, password }));
+export type LoginInput = z.input<typeof loginInput>;
 
+/** PATCH /api/account. */
+export const updateAccountInput = z.object({ displayName: displayNameSchema });
+export type UpdateAccountInput = z.input<typeof updateAccountInput>;
+
+/**
+ * POST /api/account/password. `currentPassword` is required (and checked by the server) when the
+ * account has a password; an account without one needs the re-auth window instead.
+ */
 export const changePasswordInput = z.object({
-  currentPassword: z.string().min(1, 'Required').max(LIMITS.passwordMax),
+  currentPassword: z.string().min(1, 'Required').max(LIMITS.passwordMax).optional(),
   newPassword: passwordSchema,
 });
-export type ChangePasswordInput = z.infer<typeof changePasswordInput>;
+export type ChangePasswordInput = z.input<typeof changePasswordInput>;
+
+/** POST /api/account/reauth/password: refreshes the re-auth window. */
+export const reauthPasswordInput = z.object({ password: z.string().min(1, 'Required').max(LIMITS.passwordMax) });
+export type ReauthPasswordInput = z.input<typeof reauthPasswordInput>;
+
+/** DELETE /api/account: `confirm` is the account's email address, or its username when it has none. */
+export const accountDeleteInput = z.object({ confirm: z.string().trim().min(1, 'Required').max(LIMITS.identifierMax) });
+export type AccountDeleteInput = z.input<typeof accountDeleteInput>;
+
+// ---------------------------------------------------------------------------
+// Spaces and members
+// ---------------------------------------------------------------------------
+
+const spaceNameSchema = z.string().trim().min(1, 'Required').max(LIMITS.spaceNameMax);
+
+/** POST /api/spaces. */
+export const spaceCreateInput = z.object({
+  name: spaceNameSchema,
+  createSampleData: z.boolean().optional(),
+  /** The client's local date; sample data is dated relative to it (default: server UTC date). */
+  today: isoDateSchema.optional(),
+  /** Create the space empty and 'importing', for an archive import into a new space (§8.4). */
+  forImport: z.boolean().optional(),
+});
+export type SpaceCreateInput = z.input<typeof spaceCreateInput>;
+
+/** PATCH /api/spaces/:spaceId (owner). */
+export const spaceUpdateInput = z.object({ name: spaceNameSchema });
+export type SpaceUpdateInput = z.input<typeof spaceUpdateInput>;
+
+/** DELETE /api/spaces/:spaceId (owner, re-auth): `confirmName` must equal the space's name. */
+export const spaceDeleteInput = z.object({ confirmName: z.string().trim().min(1, 'Required').max(LIMITS.spaceNameMax) });
+export type SpaceDeleteInput = z.input<typeof spaceDeleteInput>;
+
+/** PATCH /api/spaces/:spaceId/members/:userId (who may set what: roles.ts canChangeRole). */
+export const memberRoleInput = z.object({ role: spaceRoleSchema });
+export type MemberRoleInput = z.input<typeof memberRoleInput>;
+
+/**
+ * POST /api/spaces/:spaceId/transfer (owner, re-auth): `userId`, a member, becomes an owner; with
+ * `demoteSelfTo` the caller then takes that role, in the same transaction.
+ */
+export const transferInput = z.object({
+  userId: idSchema,
+  demoteSelfTo: z.enum(INVITABLE_ROLES).optional(),
+});
+export type TransferInput = z.input<typeof transferInput>;
 
 // ---------------------------------------------------------------------------
 // Generic
@@ -308,7 +379,7 @@ export const taskQueryInput = z.object({
   offset: z.number().int().min(0).optional(),
   /** Client's local date, used to resolve due presets. Defaults to the server's UTC date. */
   today: isoDateSchema.optional(),
-  /** Defaults to the stored settings.weekStartsOn. */
+  /** The viewer's preference (UserPreferences.weekStartsOn), for the week presets; default 1 (Monday). */
   weekStartsOn: weekStartSchema.optional(),
 });
 export type TaskQueryInput = z.input<typeof taskQueryInput>;
@@ -359,6 +430,8 @@ export const worklogReportQuery = z.object({
   projectId: idParamSchema.optional(),
   /** Client's local date; when from/to are omitted the range is [today-29, today]. */
   today: isoDateSchema.optional(),
+  /** Only this user's work logs. */
+  userId: idParamSchema.optional(),
 });
 export type WorklogReportQuery = z.infer<typeof worklogReportQuery>;
 
@@ -403,28 +476,53 @@ export const statusDeleteQuery = z.object({ reassignTo: idParamSchema.optional()
 // Settings
 // ---------------------------------------------------------------------------
 
-export const settingsSchema = z.object({
-  weekStartsOn: weekStartSchema,
+// Settings are split (design §3.6): each space has its own SpaceSettings (GET/PATCH
+// /api/s/:spaceId/settings), each account its UserPreferences (PATCH /api/account/preferences).
+// Settings is the client's merged view of both.
+
+export const spaceSettingsSchema = z.object({
   estimateUnit: z.enum(ESTIMATE_UNITS),
   defaultBoardId: idSchema.nullable(),
-  homePage: z.enum(['dashboard', 'default_board']),
+});
+export type SpaceSettings = z.infer<typeof spaceSettingsSchema>;
+
+export const userPreferencesSchema = z.object({
+  weekStartsOn: weekStartSchema,
+  homePage: homePageSchema,
+});
+export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+
+export const settingsSchema = z.object({
+  weekStartsOn: userPreferencesSchema.shape.weekStartsOn,
+  estimateUnit: spaceSettingsSchema.shape.estimateUnit,
+  defaultBoardId: spaceSettingsSchema.shape.defaultBoardId,
+  homePage: userPreferencesSchema.shape.homePage,
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
+export const DEFAULT_SPACE_SETTINGS: SpaceSettings = { estimateUnit: 'points', defaultBoardId: null };
+export const DEFAULT_PREFERENCES: UserPreferences = { weekStartsOn: 1, homePage: 'dashboard' };
+
 export const DEFAULT_SETTINGS: Settings = {
-  weekStartsOn: 1,
-  estimateUnit: 'points',
-  defaultBoardId: null,
-  homePage: 'dashboard',
+  weekStartsOn: DEFAULT_PREFERENCES.weekStartsOn,
+  estimateUnit: DEFAULT_SPACE_SETTINGS.estimateUnit,
+  defaultBoardId: DEFAULT_SPACE_SETTINGS.defaultBoardId,
+  homePage: DEFAULT_PREFERENCES.homePage,
 };
 
-export const settingsUpdateInput = z.object({
-  weekStartsOn: weekStartSchema.optional(),
+/** PATCH /api/s/:spaceId/settings (admin). */
+export const spaceSettingsUpdateInput = z.object({
   estimateUnit: z.enum(ESTIMATE_UNITS).optional(),
   defaultBoardId: idSchema.nullable().optional(),
-  homePage: z.enum(['dashboard', 'default_board']).optional(),
 });
-export type SettingsUpdateInput = z.input<typeof settingsUpdateInput>;
+export type SpaceSettingsUpdateInput = z.input<typeof spaceSettingsUpdateInput>;
+
+/** PATCH /api/account/preferences. */
+export const preferencesUpdateInput = z.object({
+  weekStartsOn: weekStartSchema.optional(),
+  homePage: homePageSchema.optional(),
+});
+export type PreferencesUpdateInput = z.input<typeof preferencesUpdateInput>;
 
 // ---------------------------------------------------------------------------
 // Search & dashboard
@@ -438,4 +536,215 @@ export type SearchQueryInput = z.infer<typeof searchQueryInput>;
 
 export const dashboardQueryInput = z.object({
   today: isoDateSchema.optional(),
+  /** The viewer's preference (UserPreferences.weekStartsOn); default 1 (Monday). */
+  weekStartsOn: weekStartParamSchema.optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Space data
+// ---------------------------------------------------------------------------
+
+/** ?mode= of POST /api/s/:spaceId/data/import/{analyze,commit} (design §6.4 step 2, §8.4). */
+export const importModeQuery = z.object({ mode: z.enum(['new', 'replace']) });
+export type ImportMode = z.infer<typeof importModeQuery>['mode'];
+
+/** An archive user id (shared/src/archive.ts archiveUserRefSchema: not 0, within ±IMPORT_INT_MAX = 2^40). */
+const archiveIdSchema = z
+  .number()
+  .int()
+  .min(-(2 ** 40))
+  .max(2 ** 40)
+  .refine((v) => v !== 0, 'Must not be 0');
+
+/** ImportTarget (types.ts): one of the analysis's candidates, or a new placeholder that keeps the name. */
+export const importTargetSchema = z.union([
+  z.object({ kind: z.literal('user'), userId: idSchema }),
+  z.object({ kind: z.literal('placeholder') }),
+]);
+
+/**
+ * The `mapping` field (JSON) of POST /api/s/:spaceId/data/import/commit (design §8.6): a target for every user
+ * the archive's rows reference (others are ignored; v1 files ignore the mapping), and whether to leave out the
+ * activity history (§8.9).
+ */
+export const importMappingInput = z.object({
+  mapping: z.array(z.object({ archiveId: archiveIdSchema, target: importTargetSchema })).max(10_000),
+  skipActivity: z.boolean().optional(),
+});
+export type ImportMappingInput = z.input<typeof importMappingInput>;
+
+/** POST /api/s/:spaceId/people/:personId/reassign: the member who gets the person's rows. */
+export const peopleReassignInput = z.object({ toUserId: idSchema });
+export type PeopleReassignInput = z.input<typeof peopleReassignInput>;
+
+// ---------------------------------------------------------------------------
+// Sign-up, email links, invitations and recovery (design §5.8.5-§5.8.11, §5.8.19; P5)
+// ---------------------------------------------------------------------------
+
+/** The token of an emailed or copied link (`#t=`): 32 random bytes in base64url, checked by the server. */
+const linkTokenSchema = z.string().min(20, 'Invalid link').max(200, 'Invalid link');
+
+/** POST /api/auth/signup/inspect, /api/auth/password/reset/inspect, /api/auth/email/confirm, /api/invitations/inspect. */
+export const tokenInput = z.object({ token: linkTokenSchema });
+export type TokenInput = z.input<typeof tokenInput>;
+
+/** POST /api/auth/signup (policy `open`): the answer is 202 whatever the address. */
+export const signupInput = z.object({ email: emailSchema });
+export type SignupInput = z.input<typeof signupInput>;
+
+/** POST /api/auth/signup/complete: the emailed token, and the new account's name and password. */
+export const signupCompleteInput = z.object({ token: linkTokenSchema, displayName: displayNameSchema, password: passwordSchema });
+export type SignupCompleteInput = z.input<typeof signupCompleteInput>;
+
+/** POST /api/auth/password/forgot: the answer is 202 whatever the address. */
+export const forgotPasswordInput = z.object({ email: emailSchema });
+export type ForgotPasswordInput = z.input<typeof forgotPasswordInput>;
+
+/** POST /api/auth/password/reset. */
+export const resetPasswordInput = z.object({ token: linkTokenSchema, password: passwordSchema });
+export type ResetPasswordInput = z.input<typeof resetPasswordInput>;
+
+/** POST /api/account/email (re-auth): the new address. */
+export const emailChangeInput = z.object({ email: emailSchema });
+export type EmailChangeInput = z.input<typeof emailChangeInput>;
+
+/** POST /api/auth/recover (RECOVERY_TOKEN set): the operator's token and the account to recover. */
+export const recoverInput = z.object({ token: z.string().min(1, 'Required').max(200), identifier: identifierSchema });
+export type RecoverInput = z.input<typeof recoverInput>;
+
+/** POST /api/spaces/:spaceId/invitations: inviting as admin needs an owner and the re-auth window. */
+export const invitationCreateInput = z.object({ email: emailSchema, role: z.enum(INVITABLE_ROLES) });
+export type InvitationCreateInput = z.input<typeof invitationCreateInput>;
+
+/** POST /api/admin/invitations: an instance invitation (an account, no space). */
+export const adminInvitationInput = z.object({ email: emailSchema });
+export type AdminInvitationInput = z.input<typeof adminInvitationInput>;
+
+/**
+ * POST /api/invitations/accept. Signed out, a new account: `token`, `displayName` and `password`. Signed
+ * in, the account accepts: `token` only.
+ */
+export const invitationAcceptInput = z.object({
+  token: linkTokenSchema,
+  displayName: displayNameSchema.optional(),
+  password: passwordSchema.optional(),
+});
+export type InvitationAcceptInput = z.input<typeof invitationAcceptInput>;
+
+// ---------------------------------------------------------------------------
+// Instance administration (design §5.8.18, §7.2; P5)
+// ---------------------------------------------------------------------------
+
+/** PATCH /api/admin/settings (re-auth): `open` needs a transport that delivers mail (409 mail_not_configured). */
+export const adminSettingsInput = z.object({
+  signupPolicy: z.enum(SIGNUP_POLICIES).optional(),
+  passwordMinLength: z.number().int().min(8, 'At least 8').max(64, 'At most 64').optional(),
+});
+export type AdminSettingsInput = z.input<typeof adminSettingsInput>;
+
+/** PATCH /api/admin/users/:userId (re-auth; never one's own account): disable or enable, promote or demote. */
+export const adminUserUpdateInput = z.object({
+  status: z.enum(['active', 'disabled']).optional(),
+  isInstanceAdmin: z.boolean().optional(),
+});
+export type AdminUserUpdateInput = z.input<typeof adminUserUpdateInput>;
+
+/** A page size of the admin lists (1-100; the server's default is 50). */
+const adminLimitSchema = z.coerce.number().int().min(1).max(100);
+/** The admin lists' search: matched case-insensitively (ASCII) as a part of the name or address. */
+const adminSearchSchema = z.string().trim().max(100);
+
+/**
+ * GET /api/admin/users?q&orphaned&cursor&limit: newest first; `orphaned=1`: only the active accounts that can
+ * only sign in with passkeys that do not work on this address (§5.6's warning); `cursor` is the previous
+ * page's nextCursor.
+ */
+export const adminUsersQuery = z.object({
+  q: adminSearchSchema.optional(),
+  orphaned: z.enum(['0', '1']).optional(),
+  cursor: idParamSchema.optional(),
+  limit: adminLimitSchema.optional(),
+});
+export type AdminUsersQuery = z.input<typeof adminUsersQuery>;
+
+/** GET /api/admin/spaces?q&cursor&limit: newest first; `q` matches the name, or the space id exactly. */
+export const adminSpacesQuery = z.object({
+  q: adminSearchSchema.optional(),
+  cursor: z.string().max(64).optional(),
+  limit: adminLimitSchema.optional(),
+});
+export type AdminSpacesQuery = z.input<typeof adminSpacesQuery>;
+
+// ---------------------------------------------------------------------------
+// Passkeys (design §5.6, §5.8.3, §5.8.5, §5.8.8, §5.8.9, §5.8.12-§5.8.14; P6)
+// ---------------------------------------------------------------------------
+
+/**
+ * The ceremony id an options call answered with: 43 characters of base64url for a stored ceremony, or a
+ * signed login ceremony (`<payload>.<signature>`, base64url, at most 200 characters; design §4.1).
+ */
+const ceremonyIdSchema = z
+  .string()
+  .max(200, 'Invalid ceremony')
+  .regex(/^(?:[A-Za-z0-9_-]+\.)?[A-Za-z0-9_-]{43}$/, 'Invalid ceremony');
+
+/**
+ * What @simplewebauthn/browser's startRegistration() or startAuthentication() resolved with. Only its
+ * outline is checked here; the server's WebAuthn library checks the rest.
+ */
+const webauthnResponseSchema = z.looseObject({
+  id: z.string().min(1, 'Required').max(1024),
+  rawId: z.string().max(1024),
+  type: z.literal('public-key'),
+  response: z.looseObject({}),
+});
+
+/** A passkey's name (shown in Account settings → Security). */
+export const passkeyNameSchema = z.string().trim().min(1, 'Required').max(LIMITS.passkeyNameMax);
+
+/** POST /api/auth/passkey/login/options: `conditional` for the sign-in field's autofill (a longer ceremony). */
+export const passkeyLoginOptionsInput = z.object({ conditional: z.boolean().optional() });
+export type PasskeyLoginOptionsInput = z.input<typeof passkeyLoginOptionsInput>;
+
+/** POST /api/auth/passkey/login and /api/account/reauth/passkey: the ceremony and the browser's answer. */
+export const ceremonyResponseInput = z.object({ ceremonyId: ceremonyIdSchema, response: webauthnResponseSchema });
+export type CeremonyResponseInput = z.input<typeof ceremonyResponseInput>;
+
+/** POST /api/account/passkeys: a new passkey (default name "Passkey <n>"). */
+export const passkeyRegisterInput = z.object({ ceremonyId: ceremonyIdSchema, response: webauthnResponseSchema, name: passkeyNameSchema.optional() });
+export type PasskeyRegisterInput = z.input<typeof passkeyRegisterInput>;
+
+/** PATCH /api/account/passkeys/:passkeyId. */
+export const passkeyRenameInput = z.object({ name: passkeyNameSchema });
+export type PasskeyRenameInput = z.input<typeof passkeyRenameInput>;
+
+/** POST /api/auth/signup/passkey/options: the sign-up link (inspected, not used up) and the new account's name. */
+export const signupPasskeyOptionsInput = z.object({ token: linkTokenSchema, displayName: displayNameSchema });
+export type SignupPasskeyOptionsInput = z.input<typeof signupPasskeyOptionsInput>;
+
+/** POST /api/auth/signup/passkey/complete: the account is created with the passkey and no password. */
+export const signupPasskeyCompleteInput = z.object({
+  token: linkTokenSchema,
+  ceremonyId: ceremonyIdSchema,
+  response: webauthnResponseSchema,
+  displayName: displayNameSchema,
+  passkeyName: passkeyNameSchema.optional(),
+});
+export type SignupPasskeyCompleteInput = z.input<typeof signupPasskeyCompleteInput>;
+
+/** POST /api/invitations/accept/passkey/options: a new account for the invitation, with a passkey. */
+export const invitationPasskeyOptionsInput = signupPasskeyOptionsInput;
+export type InvitationPasskeyOptionsInput = z.input<typeof invitationPasskeyOptionsInput>;
+
+/** POST /api/invitations/accept/passkey. */
+export const invitationPasskeyAcceptInput = signupPasskeyCompleteInput;
+export type InvitationPasskeyAcceptInput = z.input<typeof invitationPasskeyAcceptInput>;
+
+/** POST /api/auth/password/reset/passkey: the reset link sets up a passkey instead of a password. */
+export const resetPasskeyInput = z.object({
+  token: linkTokenSchema,
+  ceremonyId: ceremonyIdSchema,
+  response: webauthnResponseSchema,
+  name: passkeyNameSchema.optional(),
+});
+export type ResetPasskeyInput = z.input<typeof resetPasskeyInput>;

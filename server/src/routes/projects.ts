@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { DEFAULT_PROJECT_COLOR } from '@shared/constants';
 import { isoDateSchema, projectCreateInput, projectUpdateInput, reorderInput } from '@shared/schemas';
-import { currentUser } from '../auth/context';
+import { fold } from '../core/fold';
 import type { AppEnv, Deps } from '../env';
 import { HttpError } from '../http/errors';
 import { readId, readJson, readQuery } from '../http/validate';
@@ -25,6 +25,7 @@ import {
 } from '../services/entities';
 import type { ProjectRow } from '../services/rows';
 import { nowIso, serverToday } from '../services/sql';
+import { currentUser } from '../space/context';
 
 /** `?today=` (the client's local date) drives stats.tasksOverdue; defaults to the server's UTC date. */
 const todayQuery = z.object({ today: isoDateSchema.optional() });
@@ -52,12 +53,15 @@ export function projectRoutes({ db }: Deps) {
       const key = input.key ?? generateProjectKey(db, input.name);
       const now = nowIso();
       const projectId = db.run(
-        `INSERT INTO projects (key, name, description, color, status, position, task_counter, created_at, updated_at)
-         VALUES (:key, :name, :description, :color, :status, :position, 0, :now, :now)`,
+        `INSERT INTO projects (key, name, name_fold, description, description_fold, color, status, position, task_counter,
+                               created_at, updated_at)
+         VALUES (:key, :name, :nameFold, :description, :descriptionFold, :color, :status, :position, 0, :now, :now)`,
         {
           key,
           name: input.name,
+          nameFold: fold(input.name),
           description: input.description ?? '',
+          descriptionFold: fold(input.description ?? ''),
           color: input.color ?? DEFAULT_PROJECT_COLOR,
           status: input.status ?? 'active',
           position: nextPosition(db, 'projects'),
@@ -120,9 +124,20 @@ export function projectRoutes({ db }: Deps) {
       const now = nowIso();
       db.run(
         `UPDATE projects
-            SET name = :name, key = :key, description = :description, color = :color, status = :status, updated_at = :now
+            SET name = :name, name_fold = :nameFold, key = :key, description = :description,
+                description_fold = :descriptionFold, color = :color, status = :status, updated_at = :now
           WHERE id = :id`,
-        { id, name: after.name, key: after.key, description: after.description, color: after.color, status: after.status, now },
+        {
+          id,
+          name: after.name,
+          nameFold: fold(after.name),
+          key: after.key,
+          description: after.description,
+          descriptionFold: fold(after.description),
+          color: after.color,
+          status: after.status,
+          now,
+        },
       );
       recordActivity(db, {
         userId: user.id,

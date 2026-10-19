@@ -21,6 +21,7 @@ import { formatMinutes } from '@shared/duration';
 import type { DashboardDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
 import { useDashboard } from '../../api/misc';
+import { useSpace, useSpacePath } from '../../app/space';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { ButtonLink, Card, EmptyState, ErrorState, Skeleton } from '../../components/ui';
@@ -32,8 +33,8 @@ import { dueTomorrowHint, greetingFor } from './dashboardModel';
 export default function DashboardPage() {
   useDocumentTitle('Dashboard');
   const today = useToday();
-  const { user, projects } = useLookups();
-  const dashboard = useDashboard(today);
+  const { user, projects, settings } = useLookups();
+  const dashboard = useDashboard(today, settings.weekStartsOn);
 
   const header = (
     <PageHeader title={`${greetingFor(new Date().getHours())}, ${user.displayName}`} subtitle={formatDateLong(today)} />
@@ -53,6 +54,7 @@ export default function DashboardPage() {
 }
 
 function DashboardContent({ data, today }: { data: DashboardDTO; today: string }) {
+  const sp = useSpacePath();
   const { counts } = data;
   const oldestOverdue = data.overdue[0]?.dueDate ?? null;
   const tasksUnit = (n: number) => (n === 1 ? 'task' : 'tasks');
@@ -103,7 +105,7 @@ function DashboardContent({ data, today }: { data: DashboardDTO; today: string }
               hint={`Today ${formatMinutes(data.worklog.todayMinutes)}`}
               icon={<Timer />}
               tone="success"
-              target={{ to: '/worklog' }}
+              target={{ to: sp('/worklog') }}
             />
           </li>
         </ul>
@@ -204,16 +206,24 @@ function DashboardSkeleton() {
 }
 
 function Welcome() {
+  const sp = useSpacePath();
+  const { write } = useSpace().permissions;
   return (
     <Card padding="lg">
       <EmptyState
         icon={<Sparkles />}
         title="Welcome to Lyren Plan"
-        body="Create your first project to start planning. Overdue and upcoming tasks, work in progress and recent activity will show up here."
+        body={
+          write
+            ? 'Create your first project to start planning. Overdue and upcoming tasks, work in progress and recent activity will show up here.'
+            : 'This space has no projects yet. Overdue and upcoming tasks, work in progress and recent activity will show up here.'
+        }
         action={
-          <ButtonLink to="/projects" variant="primary" icon={<Plus />}>
-            Create a project
-          </ButtonLink>
+          write && (
+            <ButtonLink to={sp('/projects')} variant="primary" icon={<Plus />}>
+              Create a project
+            </ButtonLink>
+          )
         }
       />
     </Card>

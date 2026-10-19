@@ -1,0 +1,6 @@
+# Configuration of actionlint (https://github.com/rhysd/actionlint), which checks the workflows.
+self-hosted-runner:
+  # Not self-hosted: GitHub's Ubuntu 26.04 runner, generally available since after actionlint 1.7.12
+  # (https://github.com/actions/runner-images/issues/14747), which therefore doesn't know the label.
+  labels:
+    - ubuntu-26.04

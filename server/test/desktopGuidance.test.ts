@@ -1,6 +1,6 @@
-// How the web client learns that the single-file desktop app serves it (routes/desktop.ts), so the
-// sign-in page and Settings → Data show the app's commands; and the reset-password line for each
-// audience (cli.ts lockoutAdvice). The Node build's and Docker's responses must not change.
+// How the web client learns that the single-file desktop app serves it (runtime/node/desktop.ts), so the
+// sign-in page and Administration → Overview show the app's commands; and the reset-password line (cli.ts
+// lockoutAdvice). The Node build's and Docker's responses must not carry the desktop fields.
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -8,17 +8,13 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { CSRF_HEADER } from '@shared/constants';
 import type { AuthStatusDTO, BootstrapDTO } from '@shared/types';
-import { createApp } from '../src/app';
-import { hashPassword } from '../src/auth/passwords';
 import { lockoutAdvice } from '../src/cli';
 import { loadConfig } from '../src/config';
-import { openDb } from '../src/db';
-import { ensureDefaults } from '../src/db/seed';
-import type { DesktopDeps } from '../src/env';
-import { desktopData, separateDbPath } from '../src/routes/desktop';
+import { desktopData, separateDbPath, type DesktopDeps } from '../src/runtime/node/desktop';
+import { openNodeStack } from '../src/runtime/node/stack';
 import { createTestContext } from './helpers';
+import { directoryWithOwner, ownerPasswordHash } from './support/directoryFile';
 import { ROOT, tsxCommand, tsxEnv } from './tsxNode';
 
 const dirs: string[] = [];
@@ -31,33 +27,44 @@ function tmp(prefix: string) {
   return dir;
 }
 
-/** The keys of the responses before the desktop app existed, in their order. */
-const STATUS_KEYS = ['setupRequired', 'setupCodeRequired', 'user', 'version'];
-const BOOTSTRAP_KEYS = ['user', 'settings', 'version', 'statuses', 'tags', 'projects', 'milestones', 'epics', 'boards'];
+/** The keys of the responses without the desktop app, in their order (§7.2, §7.3). */
+const STATUS_KEYS = [
+  'setupRequired',
+  'setupCodeRequired',
+  'user',
+  'version',
+  'instance',
+  'spaces',
+  'preferences',
+  'reauthUntil',
+  'notices',
+  'legacySpaceId',
+];
+const BOOTSTRAP_KEYS = ['user', 'space', 'people', 'settings', 'version', 'statuses', 'tags', 'projects', 'milestones', 'epics', 'boards'];
 
-const SETUP = { username: 'owner', password: 'correct horse battery', displayName: 'Owner', createSampleData: false };
+const SETUP = { email: 'owner@example.com', password: 'correct horse battery', displayName: 'Owner', createSampleData: false };
 
 const configFor = (dataDir: string, dbPath = path.join(dataDir, 'lyren.db')) =>
   loadConfig({ dataDir, dbPath, webDir: null, cookieSecure: false, logRequests: false, setupToken: null });
 
-/** An app like the desktop app's (Deps.desktop) on an in-memory database, and a cookie-keeping fetch. */
+/**
+ * A server like the desktop app's (NodeStackOptions.desktop) on in-memory databases, and a cookie-keeping
+ * client. The folders it reports are its Config's, read for each response: those of a desktop app with
+ * this data folder and DB_PATH, which are never opened.
+ */
 function desktopApp(desktop: DesktopDeps, dataDir: string, dbPath = path.join(dataDir, 'lyren.db')) {
-  const db = openDb(':memory:');
-  ensureDefaults(db);
-  const config = configFor(dataDir, dbPath);
-  const app = createApp({ db, config, desktop });
-  let cookie: string | null = null;
+  const ctx = createTestContext({ desktop });
+  Object.assign(ctx.config, { dataDir, dbPath });
+  let client = ctx.client();
   async function call(method: string, url: string, body?: unknown) {
-    const headers: Record<string, string> = { [CSRF_HEADER]: '1' };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
-    if (cookie) headers.Cookie = cookie;
-    const res = await app.request(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-    const set = res.headers.get('set-cookie');
-    if (set) cookie = set.split(';')[0]!;
-    const text = await res.text();
-    return { status: res.status, text, body: text ? JSON.parse(text) : null };
+    const res = await client.request(method, url, body);
+    return { status: res.status, text: JSON.stringify(res.body), body: res.body };
   }
-  return { call, db };
+  /** First-run setup (ctx.signedIn: it throws unless it succeeds); later calls are signed in. */
+  async function setup() {
+    client = (await ctx.signedIn(SETUP)).client;
+  }
+  return { call, setup, ctx };
 }
 
 describe('Node build and Docker: responses unchanged', () => {
@@ -95,15 +102,15 @@ describe('desktop app: what the client is told', () => {
     expect((await call('GET', '/api/bootstrap')).status).toBe(401);
   });
 
-  it('signed in: the data folder and the program folder, in bootstrap only', async () => {
-    const { call } = desktopApp(WIN, WIN.defaultDataDir);
-    expect((await call('POST', '/api/auth/setup', SETUP)).status).toBe(201);
+  // §7.3, Appendix D 25: the folders moved from bootstrap to the auth status (desktopData), which only
+  // instance admins get.
+  it('signed in: the data folder and the program folder, for instance admins only', async () => {
+    const { call, setup, ctx } = desktopApp(WIN, WIN.defaultDataDir);
+    await setup();
     const status = await call('GET', '/api/auth/status');
+    expect(Object.keys(status.body)).toEqual([...STATUS_KEYS, 'desktop', 'desktopData']);
     expect(status.body.desktop).toEqual({ exe: 'lyren-plan-0.1.0-win-x64.exe', windows: true });
-    expect(status.text).not.toContain('dana');
-    const boot = await call('GET', '/api/bootstrap');
-    expect(Object.keys(boot.body)).toEqual([...BOOTSTRAP_KEYS, 'desktop']);
-    expect(boot.body.desktop).toEqual({
+    expect(status.body.desktopData).toEqual({
       exe: 'lyren-plan-0.1.0-win-x64.exe',
       windows: true,
       dataDir: WIN.defaultDataDir,
@@ -111,19 +118,27 @@ describe('desktop app: what the client is told', () => {
       customDataDir: false,
       exeFolder: WIN.exeFolder,
     });
+    const boot = await call('GET', '/api/bootstrap');
+    expect(Object.keys(boot.body)).toEqual(BOOTSTRAP_KEYS);
+    expect(JSON.stringify(boot.body)).not.toContain('dana');
+    // Another member of the space sees the program's name only.
+    const { client: member } = await ctx.addUser({ email: 'member@example.com' });
+    const theirs = await member.get<AuthStatusDTO>('/api/auth/status');
+    expect(Object.keys(theirs.body)).toEqual([...STATUS_KEYS, 'desktop']);
+    expect(JSON.stringify(theirs.body)).not.toContain('dana');
   });
 
   it('a data folder of its own (--data-dir) and DB_PATH are reported', async () => {
     const own = desktopApp(WIN, '/media/usb/Lyren');
-    await own.call('POST', '/api/auth/setup', SETUP);
-    expect((await own.call('GET', '/api/bootstrap')).body.desktop).toMatchObject({ dataDir: '/media/usb/Lyren', customDataDir: true });
+    await own.setup();
+    expect((await own.call('GET', '/api/auth/status')).body.desktopData).toMatchObject({ dataDir: '/media/usb/Lyren', customDataDir: true });
     // Windows compares folders without case.
     const sameFolder = desktopApp(WIN, path.join(HOME, 'appdata', 'local', 'lyren plan'));
-    await sameFolder.call('POST', '/api/auth/setup', SETUP);
-    expect((await sameFolder.call('GET', '/api/bootstrap')).body.desktop.customDataDir).toBe(false);
+    await sameFolder.setup();
+    expect((await sameFolder.call('GET', '/api/auth/status')).body.desktopData.customDataDir).toBe(false);
     const linux = desktopApp({ ...WIN, windows: false }, path.join(HOME, 'appdata', 'local', 'lyren plan'), '/srv/db/plan.db');
-    await linux.call('POST', '/api/auth/setup', SETUP);
-    expect((await linux.call('GET', '/api/bootstrap')).body.desktop).toMatchObject({
+    await linux.setup();
+    expect((await linux.call('GET', '/api/auth/status')).body.desktopData).toMatchObject({
       windows: false,
       customDataDir: true,
       dbPath: '/srv/db/plan.db',
@@ -132,14 +147,14 @@ describe('desktop app: what the client is told', () => {
 
   it('tray and terminal mode: stopMode tells the client how Lyren Plan is stopped; still no path signed out', async () => {
     const tray: DesktopDeps = { ...WIN, stopMode: 'tray' };
-    const { call } = desktopApp(tray, WIN.defaultDataDir);
+    const { call, setup } = desktopApp(tray, WIN.defaultDataDir);
     const anon = await call('GET', '/api/auth/status');
     expect(Object.keys(anon.body)).toEqual([...STATUS_KEYS, 'desktop']);
     expect(anon.body.desktop).toEqual({ exe: 'lyren-plan-0.1.0-win-x64.exe', windows: true, stopMode: 'tray' });
     expect(anon.text).not.toContain('dana');
-    await call('POST', '/api/auth/setup', SETUP);
-    const boot = await call('GET', '/api/bootstrap');
-    expect(boot.body.desktop).toMatchObject({ stopMode: 'tray', dataDir: WIN.defaultDataDir });
+    await setup();
+    const signedIn = await call('GET', '/api/auth/status');
+    expect(signedIn.body.desktopData).toMatchObject({ stopMode: 'tray', dataDir: WIN.defaultDataDir });
     // Read for each response: when the icon fails in terminal mode the field goes away.
     tray.stopMode = 'terminal';
     expect((await call('GET', '/api/auth/status')).body.desktop).toEqual({ exe: 'lyren-plan-0.1.0-win-x64.exe', windows: true, stopMode: 'terminal' });
@@ -166,39 +181,25 @@ describe('desktop app: what the client is told', () => {
   });
 });
 
+// §9.6: reset-password clears the lock-outs itself (in the directory's throttle rows), so neither the
+// server nor the desktop app needs a restart or a wait, and the last line is the same for both.
 describe('reset-password: how to lift a lock-out', () => {
-  it('server: restart the server; desktop: close the window and start the app again', () => {
-    expect(lockoutAdvice()).toBe('If you were locked out by too many attempts, wait 15 minutes or restart the server.');
-    expect(lockoutAdvice('server')).toBe(lockoutAdvice());
-    // Windows: the app may run as an icon in the notification area (desktopTray.test.ts).
-    const desktop = lockoutAdvice('desktop', 'linux');
-    expect(desktop).toBe(
-      'If you were locked out by too many attempts, wait 15 minutes, or close the Lyren Plan window and start Lyren Plan again.',
-    );
-    expect(desktop).not.toContain('server');
+  it('the command lifts it itself, for the server and the desktop app alike', () => {
+    expect(lockoutAdvice()).toBe('Any lock-out from failed sign-ins has been cleared.');
+    expect(lockoutAdvice()).not.toContain('restart');
   });
 
+  /** A data folder whose directory holds one account from before the upgrade, `owner` (§14.3). */
   async function dataDirWithOwner() {
     const dataDir = path.join(tmp('lyren-guide-cli-'), 'data');
-    const db = openDb(path.join(dataDir, 'lyren.db'));
-    const t = new Date().toISOString();
-    db.run(
-      `INSERT INTO users (username, display_name, password_hash, created_at, updated_at) VALUES ('owner', 'Owner', :h, :t, :t)`,
-      { h: await hashPassword('original-password'), t },
-    );
-    db.close();
+    await directoryWithOwner(path.join(dataDir, 'lyren.db'));
     return dataDir;
   }
 
   it.each([
-    ['server/src/index.ts', 'restart the server.'],
-    [
-      'server/src/sea.ts',
-      process.platform === 'win32'
-        ? 'choose Quit Lyren Plan from its icon in the notification area, or close its window) and start it again.'
-        : 'close the Lyren Plan window and start Lyren Plan again.',
-    ],
-  ])('%s reset-password ends with its own advice', async (entry, ending) => {
+    ['server/src/index.ts', 'Any lock-out from failed sign-ins has been cleared.'],
+    ['server/src/sea.ts', 'Any lock-out from failed sign-ins has been cleared.'],
+  ])('%s reset-password ends with the lock-out line', async (entry, ending) => {
     const dataDir = await dataDirWithOwner();
     const [cmd, args] = tsxCommand(entry, ['reset-password', 'owner']);
     const res = spawnSync(cmd, args, {
@@ -220,14 +221,7 @@ describe('reset-password: how to lift a lock-out', () => {
     const dbFile = path.join(path.dirname(other), 'elsewhere', 'plan.db');
     fs.mkdirSync(path.dirname(dbFile));
     fs.renameSync(path.join(other, 'lyren.db'), dbFile);
-    const hashOf = (file: string) => {
-      const db = openDb(file);
-      try {
-        return db.get<{ h: string }>(`SELECT password_hash AS h FROM users WHERE username = 'owner'`)!.h;
-      } finally {
-        db.close();
-      }
-    };
+    const hashOf = ownerPasswordHash;
     const before = { usual: hashOf(path.join(dataDir, 'lyren.db')), moved: hashOf(dbFile) };
     const run = (args: string[]) => {
       const [cmd, argv] = tsxCommand('server/src/sea.ts', args);
@@ -243,6 +237,53 @@ describe('reset-password: how to lift a lock-out', () => {
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain('--db-path <file> (or DB_PATH)');
   }, 90_000);
+});
+
+describe('the desktop app\'s maintenance commands (§9.7)', () => {
+  /** The desktop app from source (sea.ts) with this data folder. */
+  function desktop(dataDir: string, args: string[]) {
+    const [cmd, argv] = tsxCommand('server/src/sea.ts', args);
+    const res = spawnSync(cmd, argv, { cwd: ROOT, input: '', env: tsxEnv({ ...process.env, DATA_DIR: dataDir, DB_PATH: '' }), encoding: 'utf8', timeout: 60_000 });
+    return { status: res.status, stdout: res.stdout, stderr: res.stderr };
+  }
+
+  it('restore stages a backup and says to start the app again; promote-admin, policy and spaces work as in the Node build', async () => {
+    const dataDir = path.join(tmp('lyren-desktop-cmds-'), 'data');
+    await directoryWithOwner(path.join(dataDir, 'lyren.db'));
+    const backupFile = path.join(path.dirname(dataDir), 'lyren-2026-10-17.tar');
+    const written = desktop(dataDir, ['backup', backupFile]);
+    expect(written.status, written.stderr).toBe(0);
+    expect(desktop(dataDir, ['spaces']).stdout.trim()).toBe('No spaces yet.');
+    expect(desktop(dataDir, ['policy']).stdout.trim()).toBe('Sign-up policy: invite_only (accounts are created through invitations only).');
+    expect(desktop(dataDir, ['promote-admin', 'owner']).stdout.trim()).toBe('owner is already an instance admin.');
+    const res = desktop(dataDir, ['restore', backupFile]);
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout.trim().split('\n')).toEqual([
+      `Staged the restore of the backup set made ${JSON.parse(fs.readFileSync(path.join(dataDir, '.restore-pending', 'READY'), 'utf8')).manifest.createdAt} (0 spaces) from ${backupFile}.`,
+      'Quit Lyren Plan and start it again to complete the restore.',
+    ]);
+  }, 120_000);
+});
+
+describe('--lan: copied links name the address other devices can open (§9.7)', () => {
+  it('the LAN origins become shareOrigins while PUBLIC_URL is unset; PUBLIC_URL wins', async () => {
+    const config = loadConfig({ dataDir: tmp('lyren-lan-'), dbPath: ':memory:', webDir: null, cookieSecure: false, logRequests: false, setupToken: null });
+    const lan = ['http://192.168.1.20:43770'];
+    const stack = openNodeStack(config, { mode: 'maintenance', lanUrls: () => lan });
+    try {
+      const status = (await (await stack.app.request('/api/auth/status')).json()) as AuthStatusDTO;
+      expect(status.instance.shareOrigins).toEqual(lan);
+    } finally {
+      stack.close();
+    }
+    const withUrl = openNodeStack({ ...config, publicUrl: 'https://plan.example.com' }, { mode: 'maintenance', lanUrls: () => lan });
+    try {
+      const status = (await (await withUrl.app.request('/api/auth/status')).json()) as AuthStatusDTO;
+      expect(status.instance.shareOrigins).toEqual(['https://plan.example.com']);
+    } finally {
+      withUrl.close();
+    }
+  });
 });
 
 describe('the running servers, started from source', () => {

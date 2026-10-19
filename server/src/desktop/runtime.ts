@@ -3,10 +3,10 @@
 // problems in message boxes, a console window as the last resort), or both (terminal mode).
 //
 // A command other than serve started without a console where a person may be at the screen (a
-// shortcut or Win+R with `reset-password`, `backup`, `stop` or `help`, another file manager or
-// launcher, Start-Process: mode.ts commandMode) runs in 'tray' mode too, without a log file: what it
-// printed is shown when it ends (showOutput), in a message box, or in a console window when it is
-// long (help). Neither keeps the command running: it exits with its exit code once the box (or the
+// shortcut or Win+R with `reset-password`, `backup`, `restore`, `stop`, `help` or another command,
+// another file manager or launcher, Start-Process: mode.ts commandMode) runs in 'tray' mode too,
+// without a log file: what it printed is shown when it ends (showOutput), in a message box, or in a
+// console window when it is long (help). Neither keeps the command running: it exits with its exit code once the box (or the
 // console window, a new process) is up, and the box stays until OK is clicked. Started by Task
 // Scheduler, a service or WMI, or in session 0, it runs 'unattended': nothing is shown; what it
 // printed goes to the log file next to the database (main.ts opens it), and it exits at once.

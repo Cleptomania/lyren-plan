@@ -1,24 +1,33 @@
-// Runtime configuration, read once from environment variables.
+// Runtime configuration on Node, read once from environment variables: the settings both runtimes
+// share (core/config.ts, AppConfig) plus the Node-only ones (where the data is, how to listen).
+// Runtime-neutral code never imports this module (it reads process.env and imports node:path).
 //
 // The defaults for unset variables depend on the distribution: the Node build (dist/server.mjs)
 // and Docker use SERVER_DEFAULTS; the single-file desktop app (desktop/) passes its own (a
 // per-user data folder, 127.0.0.1, another port, the embedded web client).
 
 import path from 'node:path';
-import { DEFAULT_SNAPSHOT_KEEP } from './db/snapshots';
+import { parseAppConfig, readBool, readInt, type AppConfig } from './core/config';
 
 declare const __APP_VERSION__: string | undefined;
 
 export const APP_VERSION: string =
   typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : (process.env.npm_package_version ?? 'dev');
 
-export interface Config {
+/**
+ * The Node configuration. The AppConfig part (runtime 'node', publicUrl, logRequests, bodyLimit,
+ * importBodyLimit, directory, space) is what the directory and space apps get; the fields below are
+ * Node's own. sessionTtlDays, setupToken and snapshotKeep repeat directory.sessionTtlDays,
+ * directory.setupToken and space.snapshotKeep (loadConfig keeps overrides of them in step).
+ */
+export interface Config extends AppConfig {
+  runtime: 'node';
   /** Interface to bind (default 0.0.0.0). */
   host: string;
   port: number;
-  /** Directory holding the SQLite database (default ./data). */
+  /** The data folder (default ./data). */
   dataDir: string;
-  /** Full path of the database file; ':memory:' in tests. */
+  /** Full path of the directory database (the spaces are next to it, §3.1); ':memory:' in tests. */
   dbPath: string;
   /** Directory with the built web client (index.html + assets). null = don't serve the UI. */
   webDir: string | null;
@@ -33,35 +42,33 @@ export interface Config {
   sessionTtlDays: number;
   /** Max JSON body size in bytes for normal requests. */
   bodyLimit: number;
-  /** Max body size for POST /api/data/import. */
+  /** Max body size of a space import. */
   importBodyLimit: number;
   /** Log each request to stdout. */
   logRequests: boolean;
   /**
-   * Automatic safety snapshots of each kind (backups/pre-import-*.db, backups/lyren-v*-before-upgrade-*.db)
+   * Automatic safety snapshots of each kind and folder (pre-import-*.db, *-before-upgrade-*.db; db/snapshots.ts)
    * to keep; older ones are deleted after a new one is written. 0 = keep all (never delete).
    */
   snapshotKeep: number;
   /**
-   * Code required by first-run setup (POST /api/auth/setup) while no user exists.
-   * From SETUP_TOKEN, else generated at startup and printed to the log. null = not required (tests).
+   * Code required by first-run setup (POST /api/auth/setup) while no user exists: SETUP_TOKEN, or null,
+   * and the directory generates one (printed to the log, §5.8.1).
    */
   setupToken: string | null;
+  /** SPACES_OPEN_MAX (default 32): space databases kept open at once. */
+  spacesOpenMax: number;
+  /** ALLOW_ADMIN_BACKUP_DOWNLOAD (default true): instance admins can download a backup set. */
+  allowAdminBackupDownload: boolean;
 }
 
 /** A boolean variable: unset or empty -> `fallback`; else true only for 1, true, yes or on (any case). */
 export function envBool(name: string, fallback: boolean): boolean {
-  const v = process.env[name];
-  if (v === undefined || v === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase());
+  return readBool(process.env, name, fallback);
 }
 
 function envInt(name: string, fallback: number, max = Number.MAX_SAFE_INTEGER, min = 1): number {
-  const v = process.env[name];
-  if (v === undefined || v.trim() === '') return fallback;
-  const n = Number(v);
-  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`Invalid value for ${name}: ${v} (expected ${min}..${max})`);
-  return n;
+  return readInt(process.env, name, fallback, max, min);
 }
 
 /** Values used for unset environment variables. */
@@ -90,10 +97,38 @@ export function bundledWebDir(entryDir: string): string {
   return path.basename(entryDir) === 'src' ? path.resolve(entryDir, '../../dist/web') : path.join(entryDir, 'web');
 }
 
+/**
+ * The flat fields that the AppConfig sub-objects repeat: an override of one (tests set them) reaches
+ * the sub-object too, so the flat field and the apps' configuration never disagree.
+ */
+function withOverrides(base: Config, overrides: Partial<Config>): Config {
+  const config: Config = { ...base, ...overrides };
+  const has = (key: keyof Config) => Object.hasOwn(overrides, key);
+  const directory = { ...config.directory, quotas: { ...config.directory.quotas } };
+  const space = { ...config.space };
+  if (has('sessionTtlDays')) directory.sessionTtlDays = config.sessionTtlDays;
+  if (has('setupToken')) directory.setupToken = config.setupToken;
+  if (has('bodyLimit')) {
+    space.bodyLimit = config.bodyLimit;
+    directory.bodyLimit = config.bodyLimit;
+  }
+  if (has('importBodyLimit')) {
+    space.importBodyLimit = config.importBodyLimit;
+    directory.quotas.importMaxBytes = config.importBodyLimit;
+  }
+  if (has('snapshotKeep')) space.snapshotKeep = config.snapshotKeep;
+  return { ...config, directory, space };
+}
+
 export function loadConfig(overrides: Partial<Config> = {}, defaults: ConfigDefaults = SERVER_DEFAULTS): Config {
+  const app = parseAppConfig(process.env, 'node');
+  // HOST, DATA_DIR, WEB_DIR and COOKIE_SECURE keep today's meaning of an empty value (every
+  // interface, the working directory, API only, false); every other variable treats it as unset.
   const dataDir = path.resolve(process.env.DATA_DIR ?? defaults.dataDir);
   const cookieSecureEnv = (process.env.COOKIE_SECURE ?? 'auto').toLowerCase();
   const base: Config = {
+    ...app,
+    runtime: 'node',
     host: process.env.HOST ?? defaults.host,
     port: envInt('PORT', defaults.port, 65535),
     dataDir,
@@ -102,13 +137,11 @@ export function loadConfig(overrides: Partial<Config> = {}, defaults: ConfigDefa
     webDir: process.env.WEB_DIR !== undefined ? process.env.WEB_DIR || null : defaults.webDir,
     cookieSecure: cookieSecureEnv === 'auto' ? 'auto' : envBool('COOKIE_SECURE', false),
     trustProxy: envBool('TRUST_PROXY', false),
-    // Browsers cap cookie Max-Age at 400 days.
-    sessionTtlDays: envInt('SESSION_TTL_DAYS', 30, 400),
-    bodyLimit: envInt('BODY_LIMIT', 2 * 1024 * 1024),
-    importBodyLimit: envInt('IMPORT_BODY_LIMIT', 50 * 1024 * 1024),
-    logRequests: envBool('LOG_REQUESTS', false),
-    snapshotKeep: envInt('SNAPSHOT_KEEP', DEFAULT_SNAPSHOT_KEEP, 100_000, 0),
-    setupToken: process.env.SETUP_TOKEN?.trim() || null,
+    sessionTtlDays: app.directory.sessionTtlDays,
+    snapshotKeep: app.space.snapshotKeep,
+    setupToken: app.directory.setupToken,
+    spacesOpenMax: envInt('SPACES_OPEN_MAX', 32, 10_000),
+    allowAdminBackupDownload: envBool('ALLOW_ADMIN_BACKUP_DOWNLOAD', true),
   };
-  return { ...base, ...overrides };
+  return withOverrides(base, overrides);
 }

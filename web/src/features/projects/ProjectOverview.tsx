@@ -8,9 +8,11 @@ import { useCallback, useId, useMemo, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { MilestoneDTO, ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace, useSpaceId } from '../../app/space';
 import { isBoolean, usePersistentState } from '../../components/layout/usePersistentState';
 import { Button, Card, Disclosure, EmptyState, IconButton, Menu, ProgressBar } from '../../components/ui';
 import { percent, pluralize } from '../../lib/format';
+import { spaceKey } from '../../lib/spaceStorage';
 import { milestoneUrl } from '../../lib/taskLinks';
 import { TaskList } from '../tasks/TaskList';
 import { EditableMarkdown } from './EditableMarkdown';
@@ -37,7 +39,8 @@ const isOpenState = (v: unknown): v is OpenState =>
 
 /** Remembered open/closed state of overview sections (milestones `m:<id>`, epics `e:<id>`, groups `s:<name>`). */
 function useOverviewState(projectId: number) {
-  const [state, setState] = usePersistentState<OpenState>(`lyren.overview.${projectId}`, {}, isOpenState);
+  const sid = useSpaceId();
+  const [state, setState] = usePersistentState<OpenState>(spaceKey(sid, `overview.${projectId}`), {}, isOpenState);
   return useMemo(
     () => ({
       isOpen: (key: string, fallback: boolean) => state[key] ?? fallback,
@@ -49,6 +52,7 @@ function useOverviewState(projectId: number) {
 }
 
 function Overview({ project }: { project: ProjectDTO }) {
+  const { write } = useSpace().permissions;
   const { milestonesByProject, epicsByProject } = useLookups();
   const milestones = milestonesByProject.get(project.id) ?? [];
   const epics = epicsByProject.get(project.id) ?? [];
@@ -74,6 +78,7 @@ function Overview({ project }: { project: ProjectDTO }) {
             value={project.description}
             onSave={async (description) => (await saveProject(project, { description })) !== undefined}
             canSaveOnLeave={() => stillInBootstrap('projects', project.id)}
+            readOnly={!write}
           />
         </Card>
         <ProjectSummary project={project} />
@@ -97,9 +102,11 @@ function Overview({ project }: { project: ProjectDTO }) {
                 {allMilestonesOpen ? 'Collapse all' : 'Expand all'}
               </Button>
             )}
-            <Button size="sm" icon={<Plus />} onClick={dialogs.newMilestone}>
-              Add milestone
-            </Button>
+            {write && (
+              <Button size="sm" icon={<Plus />} onClick={dialogs.newMilestone}>
+                Add milestone
+              </Button>
+            )}
           </div>
         </div>
         {sections.length === 0 ? (
@@ -110,9 +117,11 @@ function Overview({ project }: { project: ProjectDTO }) {
               title="No milestones yet"
               body="Milestones group epics towards a target date and roll up their progress."
               action={
-                <Button size="sm" icon={<Plus />} onClick={dialogs.newMilestone}>
-                  Add milestone
-                </Button>
+                write && (
+                  <Button size="sm" icon={<Plus />} onClick={dialogs.newMilestone}>
+                    Add milestone
+                  </Button>
+                )
               }
             />
           </Card>
@@ -137,9 +146,11 @@ function Overview({ project }: { project: ProjectDTO }) {
         open={ui.isOpen('s:loose', true)}
         onOpenChange={(open) => ui.setOpen('s:loose', open)}
         actions={
-          <Button size="sm" variant="ghost" icon={<Plus />} onClick={() => dialogs.newEpic(null)}>
-            Add epic
-          </Button>
+          write && (
+            <Button size="sm" variant="ghost" icon={<Plus />} onClick={() => dialogs.newEpic(null)}>
+              Add epic
+            </Button>
+          )
         }
         contentClassName="mt-2"
       >
@@ -230,6 +241,8 @@ function MilestoneList({
   epicExpanded: (epicId: number) => boolean;
   setEpicExpanded: (epicId: number, open: boolean) => void;
 }) {
+  const sid = useSpaceId();
+  const { write } = useSpace().permissions;
   const navigate = useNavigate();
   const reorder = useReorder('milestones');
   const save = useSaveMilestone();
@@ -244,6 +257,7 @@ function MilestoneList({
         getId={sectionId}
         getLabel={sectionName}
         noun="milestones"
+        disabled={!write}
         onMove={(activeId, overId) => apply(reorderSubset(ids, ids, activeId, overId))}
         renderItem={(section, sortable) => {
           const m = section.milestone;
@@ -262,8 +276,8 @@ function MilestoneList({
               open={isOpen(m)}
               onOpenChange={(open) => setOpen(m, open)}
               onStatus={setStatus}
-              menu={milestoneMenuItems(m, {
-                open: () => navigate(milestoneUrl(project.id, m.id)),
+              menu={write && milestoneMenuItems(m, {
+                open: () => navigate(milestoneUrl(sid, project.id, m.id)),
                 edit: () => dialogs.editMilestone(m),
                 setStatus,
                 addEpic: () => dialogs.newEpic(m.id),
@@ -285,11 +299,13 @@ function MilestoneList({
                 onExpandedChange={setEpicExpanded}
                 emptyText="No epics in this milestone yet."
               />
-              <div className="border-t border-border px-2 py-1.5 md:px-3">
-                <Button size="sm" variant="ghost" icon={<Plus />} onClick={() => dialogs.newEpic(m.id)}>
-                  Add epic
-                </Button>
-              </div>
+              {write && (
+                <div className="border-t border-border px-2 py-1.5 md:px-3">
+                  <Button size="sm" variant="ghost" icon={<Plus />} onClick={() => dialogs.newEpic(m.id)}>
+                    Add epic
+                  </Button>
+                </div>
+              )}
             </MilestoneCard>
           );
         }}
@@ -314,9 +330,11 @@ function MilestoneCard({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onStatus: (status: MilestoneDTO['status']) => void;
-  menu: ReturnType<typeof milestoneMenuItems>;
+  /** false: the role may not change the milestone (no menu). */
+  menu: ReturnType<typeof milestoneMenuItems> | false;
   children: ReactNode;
 }) {
+  const sid = useSpaceId();
   const panelId = useId();
   const m = section.milestone;
   const closed = isMilestoneClosed(m.status);
@@ -339,7 +357,7 @@ function MilestoneCard({
             <h3 className="min-w-0 text-[15px] font-semibold leading-6">
               {/* Touch: a 40px tall target (padding cancelled by margins). */}
               <Link
-                to={milestoneUrl(project.id, m.id)}
+                to={milestoneUrl(sid, project.id, m.id)}
                 className={clsx(
                   'break-words hover:underline pointer-coarse:-my-2 pointer-coarse:block pointer-coarse:py-2',
                   closed ? 'text-fg-muted' : 'text-fg',
@@ -363,7 +381,7 @@ function MilestoneCard({
             </span>
           </div>
         </div>
-        <Menu label={m.name} items={menu} trigger={<IconButton aria-label={`Actions for ${m.name}`} icon={<MoreHorizontal />} />} />
+        {menu && <Menu label={m.name} items={menu} trigger={<IconButton aria-label={`Actions for ${m.name}`} icon={<MoreHorizontal />} />} />}
       </div>
       <div id={panelId} hidden={!open} className="border-t border-border">
         {open && children}

@@ -5,9 +5,10 @@ import { Tag } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { LIMITS } from '@shared/constants';
 import type { BootstrapDTO, TagDTO } from '@shared/types';
-import { useCreateTag } from '../../api/admin';
+import { useCreateTag } from '../../api/spaceAdmin';
 import { useLookups } from '../../api/bootstrap';
 import { qk } from '../../api/keys';
+import { useSpaceId } from '../../app/space';
 import { Picker, PickerList, toast } from '../ui';
 import { useTagOptions } from './options';
 import type { DomainPickerProps } from './pickerTypes';
@@ -21,6 +22,7 @@ import { TagList } from './Tags';
  * Errors are toasted and re-thrown (the picker keeps the typed text).
  */
 export function useCreateTagFromPicker(): (name: string) => Promise<TagDTO> {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const { mutateAsync } = useCreateTag();
   return useCallback(
@@ -33,7 +35,7 @@ export function useCreateTagFromPicker(): (name: string) => Promise<TagDTO> {
       }
       try {
         const tag = await mutateAsync({ name, color: paletteColor(name) });
-        qc.setQueryData<BootstrapDTO>(qk.bootstrap, (boot) =>
+        qc.setQueryData<BootstrapDTO>(qk.bootstrap(sid), (boot) =>
           boot && !boot.tags.some((t) => t.id === tag.id) ? { ...boot, tags: [...boot.tags, tag] } : boot,
         );
         return tag;
@@ -42,7 +44,7 @@ export function useCreateTagFromPicker(): (name: string) => Promise<TagDTO> {
         throw err;
       }
     },
-    [mutateAsync, qc],
+    [mutateAsync, qc, sid],
   );
 }
 
@@ -94,14 +96,16 @@ export function TagPicker({
   const options = useTagOptions();
   const onCreate = useTagCreate(value, onChange, allowCreate);
   const selected = value.map((id) => tagById.get(id)).filter((t): t is TagDTO => t !== undefined);
+  // A read-only trigger (design §12.9) offers nothing to add.
+  const empty = triggerProps?.readOnly ? 'No tags' : placeholder;
   const triggerEl = trigger ?? (
     <PropertyButton
-      aria-label={selected.length > 0 ? `${label}: ${selected.map((t) => t.name).join(', ')}` : placeholder}
+      aria-label={selected.length > 0 ? `${label}: ${selected.map((t) => t.name).join(', ')}` : empty}
       icon={selected.length > 0 ? undefined : <Tag />}
       placeholder={selected.length === 0}
       {...triggerProps}
     >
-      {selected.length > 0 ? <TagList tags={selected} max={maxChips} wrap={false} /> : placeholder}
+      {selected.length > 0 ? <TagList tags={selected} max={maxChips} wrap={false} /> : empty}
     </PropertyButton>
   );
   return (

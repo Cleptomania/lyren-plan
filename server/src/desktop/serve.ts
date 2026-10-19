@@ -23,14 +23,11 @@ import path from 'node:path';
 import { isSea } from 'node:sea';
 import { inspect } from 'node:util';
 import { createAdaptorServer } from '@hono/node-server';
-import { createApp } from '../app';
-import { commandTargetOption, separateDbPath } from '../routes/desktop';
-import { purgeExpiredSessions } from '../auth/sessions';
-import { exitWith, loadConfigOrExit, openDbOrExit, prepareDatabase } from '../cli';
+import { checkOwner, exitWith, loadConfigOrExit, openStackOrExit } from '../cli';
 import { APP_VERSION, envBool, type Config, type ConfigDefaults } from '../config';
-import type { Db } from '../db';
-import type { DesktopDeps } from '../env';
 import { diskSource, hasWebClient, type StaticSource } from '../http/static';
+import { commandTargetOption, separateDbPath, type DesktopDeps } from '../runtime/node/desktop';
+import type { NodeStack } from '../runtime/node/stack';
 import { dbOpenFailureMessage, listenFailureMessage, missingWebClientMessage } from '../startupErrors';
 import { MAX_EXPLORER_PATH, openBrowser, openFolder } from './browser';
 import { bannerLines, bannerNotices, commandLine, howToRun, waitForEnter, type BannerInfo, type ShellCommand } from './console';
@@ -41,7 +38,7 @@ import { acquireInstanceLock, canonicalDbPath, instancePipeName, type InstanceMo
 import { candidatePorts, connectProbe, isPortUnavailable, listenOnFirstAvailable, portToRemember } from './listen';
 import { relaunchInConsole } from './relaunch';
 import { consoleRuntime, type DesktopRuntime } from './runtime';
-import { writeDesktopState } from './state';
+import { readDesktopState, writeDesktopState } from './state';
 import { TrayHost, trayMenu, trayTooltip } from './tray';
 import { appUrl, browserTarget, connectHost, lanUrls } from './urls';
 
@@ -61,7 +58,7 @@ export interface DesktopServeOptions {
   defaults: ConfigDefaults;
   /** The web client embedded in the executable; null when running from source. */
   embedded: StaticSource | null;
-  /** The program's file name, for the commands the web client shows (routes/desktop.ts). Default: lyren-plan, as from source. */
+  /** The program's file name, for the commands the web client shows (runtime/node/desktop.ts). Default: lyren-plan, as from source. */
   exe?: string;
   /** How this run shows itself (runtime.ts); default: in its console window. */
   runtime?: DesktopRuntime;
@@ -194,6 +191,8 @@ const isWildcard = (host: string) => ['0.0.0.0', '::', ''].includes(host.trim())
 
 export async function serveDesktop({ defaults, embedded, exe = 'lyren-plan', runtime = consoleRuntime(), noBrowserOption = false }: DesktopServeOptions): Promise<void> {
   const config = loadConfigOrExit(defaults);
+  // Root on another user's data folder stops before it writes anything there (§9.2; not on Windows).
+  checkOwner(config);
   const explicitPort = Boolean(process.env.PORT?.trim());
   // Like every boolean variable: unset means the default, set means true only for 1/true/yes/on.
   const wantBrowser = envBool('OPEN_BROWSER', true);
@@ -260,24 +259,31 @@ export async function serveDesktop({ defaults, embedded, exe = 'lyren-plan', run
     await tray?.close();
   };
 
-  const opened: { db: Db | null } = { db: null };
+  const opened: { stack: NodeStack | null } = { stack: null };
+  /** The port listened on, once known (the LAN origins of copied links need it). */
+  let listening: number | null = null;
+  /** The setup code while no account exists: shown, in the setup link and in desktop.json. */
+  let setupCode: string | null = null;
+  // The setup code goes to the page the browser opens (and desktop.json), never into the log file,
+  // which users attach to bug reports. Starting the app again opens the page with it once more.
+  const showSetupCode = (code: string) => {
+    runtime.log?.redact(code);
+    setupCode = code;
+  };
   let started: Awaited<ReturnType<typeof start>>;
   try {
     started = await start();
   } catch (err) {
-    // Release the instance name and the database before runDesktopCli waits for Enter.
+    // Release the instance name and the databases before runDesktopCli waits for Enter.
     try {
-      opened.db?.close();
+      opened.stack?.close();
     } catch {
       /* already closed */
     }
     lock.close();
     throw err;
   }
-  const { db, server, web, port, skipped, usualPort, setupCode, folderWarnings } = started;
-  // The setup code goes to the page the browser opens (and desktop.json), never into the log file,
-  // which users attach to bug reports. Starting the app again opens the page with it once more.
-  if (setupCode) runtime.log?.redact(setupCode);
+  const { stack, server, web, port, skipped, usualPort, folderWarnings } = started;
 
   async function start() {
     const folderWarnings = prepareDataFolder(config);
@@ -286,17 +292,32 @@ export async function serveDesktop({ defaults, embedded, exe = 'lyren-plan', run
     const state = readStateOf(files);
     writeDesktopState(stateFile, { port: state.port, secret });
 
-    // ---- Database and app --------------------------------------------------------------------
-    const db = openDbOrExit(config, 'desktop');
-    opened.db = db;
-    const { firstRun } = prepareDatabase(db, config);
+    // ---- Data and app (after the instance lock: only this run may upgrade or restore the data) ----
     let web: StaticSource | null = null;
     if (config.webDir) web = diskSource(config.webDir);
     else if (process.env.WEB_DIR === undefined) web = embedded;
-    const app = createApp({ db, config, web, desktop });
+    const stack = openStackOrExit(
+      config,
+      {
+        mode: 'serve',
+        web,
+        desktop,
+        // Copied invitation and reset links name an address other devices can open (§9.7).
+        lanUrls: () => (listening === null ? [] : lanUrls(config.host, listening, os.networkInterfaces())),
+        // A code generated while running (§5.8.1): shown like the first one, and printed.
+        onSetupCode: (code) => {
+          showSetupCode(code);
+          writeDesktopState(stateFile, { ...readDesktopState(stateFile), secret, setupCode: code });
+          console.log(`  Setup code: ${code}`);
+        },
+      },
+      'desktop',
+    );
+    opened.stack = stack;
+    if (stack.setupCode) showSetupCode(stack.setupCode);
 
     // ---- Listen --------------------------------------------------------------------------------
-    const server = createAdaptorServer({ fetch: app.fetch });
+    const server = createAdaptorServer({ fetch: stack.app.fetch });
     const ports = candidatePorts({ port: config.port, explicit: explicitPort, remembered: state.port, span: DESKTOP_PORT_SPAN });
     // Windows lets two programs listen on one port (127.0.0.1 and 0.0.0.0): ask the port first.
     const probe = process.platform === 'win32' ? connectProbe(connectHost(config.host)) : undefined;
@@ -317,19 +338,17 @@ export async function serveDesktop({ defaults, embedded, exe = 'lyren-plan', run
     }
     // A remembered port that was taken this time stays remembered (see portToRemember).
     const { remember, usual: usualPort } = portToRemember({ explicit: explicitPort, remembered: state.port, used: port });
-    const setupCode = firstRun ? config.setupToken : null;
+    listening = port;
     writeDesktopState(stateFile, { port: remember, secret, ...(setupCode ? { setupCode } : {}) });
-    return { db, server, web, port, skipped, usualPort, setupCode, folderWarnings };
+    return { stack, server, web, port, skipped, usualPort, folderWarnings };
   }
 
   const url = appUrl(config.host, port);
-  const timer = setInterval(() => purgeExpiredSessions(db), 60 * 60 * 1000);
-  timer.unref();
+  // The stack runs the hourly maintenance; closing it closes every database.
   const stop = installShutdown({
     server,
-    db,
+    db: stack,
     lock,
-    timer,
     // A crash: show its own message, not everything printed to stderr since the start.
     waitForEnter: (message) => runtime.fatal(message),
     onStopping: () => {
@@ -384,7 +403,7 @@ export async function serveDesktop({ defaults, embedded, exe = 'lyren-plan', run
   running.onAction = (id) => {
     if (id === 'open') {
       // Before the first account exists: the setup page with the code, like the first start.
-      const users = Number(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM users')?.n ?? 0);
+      const users = Number(stack.directoryDb.get<{ n: number }>('SELECT COUNT(*) AS n FROM users')?.n ?? 0);
       const target = browserTarget({ platform: process.platform, url, setupRequired: setupCode !== null && users === 0, setupCode });
       void openBrowser(target.url, runtime.hooks).then((ok) => {
         if (!ok) void runtime.notify(`The browser could not be opened. Open this address in your browser:\n\n${url}`, 'Information');
@@ -482,9 +501,11 @@ function pollTrayControl(file: string, tray: TrayHost): void {
 /** What installShutdown needs; a parameter so that tests can pass fakes. */
 export interface ShutdownDeps {
   server: { close(callback?: (err?: Error) => void): unknown; closeIdleConnections?(): void; closeAllConnections?(): void };
+  /** What holds the databases (the Node stack): closed before exit. */
   db: { close(): void };
   lock: { close(): void };
-  timer: NodeJS.Timeout;
+  /** A timer to stop with the server. */
+  timer?: NodeJS.Timeout;
   proc?: { on(event: string, listener: (arg?: unknown) => void): unknown; exit(code: number): void };
   /**
    * Shows a crash and resolves once the user has seen it (console: Enter; tray: a message box).

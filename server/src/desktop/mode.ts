@@ -82,9 +82,9 @@ export interface CommandStartInput {
 }
 
 /**
- * How a command other than serve (backup, reset-password, stop, help) shows what it prints. With a
- * console or redirected output: as always ('console'). Without either it is 'unattended' only where
- * nobody can be at the screen: the process runs in session 0 (services: no desktop, e.g. a task that
+ * How a command other than serve (backup, restore, reset-password, promote-admin, policy, spaces, stop,
+ * help) shows what it prints. With a console or redirected output: as always ('console'). Without
+ * either it is 'unattended' only where nobody can be at the screen: the process runs in session 0 (services: no desktop, e.g. a task that
  * runs "whether user is logged on or not"), or its parent is Task Scheduler, a service or WMI
  * (UNATTENDED_PARENTS). Then nothing is shown, the output goes to the log file and it exits at once
  * with its exit code. Every other start ('tray': Explorer, another file manager or launcher,

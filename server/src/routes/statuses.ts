@@ -11,6 +11,7 @@
 import { Hono } from 'hono';
 import { DEFAULT_STATUS_COLOR, isClosedCategory, STATUS_CATEGORIES, type StatusCategory } from '@shared/constants';
 import { reorderInput, statusCreateInput, statusDeleteQuery, statusUpdateInput } from '@shared/schemas';
+import { fold } from '../core/fold';
 import type { Db } from '../db';
 import type { AppEnv, Deps } from '../env';
 import { badRequest, conflict } from '../http/errors';
@@ -26,12 +27,15 @@ import {
 import type { StatusRow } from '../services/rows';
 import { nowIso } from '../services/sql';
 
-/** 409 when another status (other than `exceptId`) already has this name, compared case-insensitively. */
+/**
+ * 409 when another status (other than `exceptId`) already has this name, compared case-insensitively
+ * (the Unicode fold; the UNIQUE COLLATE NOCASE constraint stays as an ASCII guard).
+ */
 function assertStatusNameFree(db: Db, name: string, exceptId: number | null = null): void {
-  const taken = db.get(
-    'SELECT 1 FROM statuses WHERE lyren_lower(name) = lyren_lower(:name) AND id IS NOT :exceptId',
-    { name, exceptId },
-  );
+  const taken = db.get('SELECT 1 FROM statuses WHERE name_fold = :fold AND id IS NOT :exceptId LIMIT 1', {
+    fold: fold(name),
+    exceptId,
+  });
   if (taken) throw conflict(`A status named “${name}” already exists`);
 }
 
@@ -69,10 +73,11 @@ export function statusRoutes({ db }: Deps) {
       const index = insertionIndex(ordered, input.category);
       const now = nowIso();
       const { lastInsertRowid } = db.run(
-        `INSERT INTO statuses (name, category, color, position, created_at, updated_at)
-         VALUES (:name, :category, :color, :position, :now, :now)`,
+        `INSERT INTO statuses (name, name_fold, category, color, position, created_at, updated_at)
+         VALUES (:name, :nameFold, :category, :color, :position, :now, :now)`,
         {
           name: input.name,
+          nameFold: fold(input.name),
           category: input.category,
           color: input.color ?? DEFAULT_STATUS_COLOR,
           position: index,
@@ -116,8 +121,9 @@ export function statusRoutes({ db }: Deps) {
       if (next.name !== row.name) assertStatusNameFree(db, next.name, id);
       const now = nowIso();
       db.run(
-        'UPDATE statuses SET name = :name, category = :category, color = :color, updated_at = :now WHERE id = :id',
-        { id, ...next, now },
+        `UPDATE statuses SET name = :name, name_fold = :nameFold, category = :category, color = :color, updated_at = :now
+          WHERE id = :id`,
+        { id, ...next, nameFold: fold(next.name), now },
       );
       const wasClosed = isClosedCategory(row.category);
       const isClosed = isClosedCategory(next.category);

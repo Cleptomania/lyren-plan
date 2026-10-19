@@ -1,6 +1,6 @@
 // /projects/:projectId — resolves the project, renders its header (color, name, key, status,
-// description toggle, actions menu) with the Overview / Board / Tasks / Activity tabs, and the
-// child route. Milestone and epic pages render their own header (breadcrumb Project › …), so
+// description toggle, actions menu by the viewer's role, design §12.9) with the Overview / Board /
+// Tasks / Activity tabs, and the child route. Milestone and epic pages render their own header (breadcrumb Project › …), so
 // for them this layout only provides the project through the outlet context.
 
 import { Archive, ArchiveRestore, FolderX, Info, Milestone as MilestoneIcon, Pencil, Plus, Trash2 } from 'lucide-react';
@@ -9,10 +9,11 @@ import { Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { PROJECT_STATUSES } from '@shared/constants';
 import type { ProjectDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
+import { useSpace, useSpaceId, useSpacePath } from '../../app/space';
 import { FullBleedPage, Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { isBoolean, usePersistentState } from '../../components/layout/usePersistentState';
-import { ButtonLink, EmptyState, IconButton, Markdown, toast, type MenuItem } from '../../components/ui';
+import { ButtonLink, EmptyState, IconButton, Markdown, normalizeMenuItems, toast } from '../../components/ui';
 import { useDocumentTitle } from '../../lib/hooks';
 import { projectUrl } from '../../lib/taskLinks';
 import { DeleteProjectDialog } from './DeleteDialogs';
@@ -38,12 +39,13 @@ function sectionOf(pathname: string, base: string): Section {
 }
 
 export default function ProjectLayout() {
+  const sp = useSpacePath();
   const { projectId: param = '' } = useParams();
   const id = parseRouteId(param);
   const { projectById } = useLookups();
   const project = id === null ? undefined : projectById.get(id);
   const { pathname } = useLocation();
-  const section = sectionOf(pathname, `/projects/${param}`);
+  const section = sectionOf(pathname, sp(`/projects/${param}`));
   // Set while this page deletes the project, so its disappearance doesn't flash "not found".
   const deletingRef = useRef<number | null>(null);
 
@@ -72,13 +74,14 @@ export default function ProjectLayout() {
 }
 
 function ProjectNotFound() {
+  const sp = useSpacePath();
   return (
-    <Page header={<PageHeader title="Project not found" backTo="/projects" breadcrumbs={[{ label: 'Projects', to: '/projects' }]} />}>
+    <Page header={<PageHeader title="Project not found" backTo={sp('/projects')} breadcrumbs={[{ label: 'Projects', to: sp('/projects') }]} />}>
       <EmptyState
         icon={<FolderX />}
         title="This project doesn’t exist"
         body="It may have been deleted, or the link is wrong."
-        action={<ButtonLink to="/projects">All projects</ButtonLink>}
+        action={<ButtonLink to={sp('/projects')}>All projects</ButtonLink>}
       />
     </Page>
   );
@@ -95,13 +98,16 @@ function ProjectChrome({
   deletingRef: RefObject<number | null>;
   children: ReactNode;
 }) {
+  const sp = useSpacePath();
+  const sid = useSpaceId();
+  const { write, deleteProjects } = useSpace().permissions;
   const navigate = useNavigate();
   const save = useSaveProject();
   const hierarchy = useHierarchyDialogs(project.id);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectDTO | null>(null);
   const [showDescription, setShowDescription] = usePersistentState('lyren.project.showDescription', false, isBoolean);
-  const base = projectUrl(project.id);
+  const base = projectUrl(sid, project.id);
   const hasDescription = project.description.trim().length > 0;
   // The overview shows (and edits) the description itself.
   const descriptionToggle = section !== 'overview' && hasDescription;
@@ -115,9 +121,9 @@ function ProjectChrome({
     });
   };
 
-  const menu: MenuItem[] = [
-    { label: 'Edit project…', icon: <Pencil />, onSelect: () => setEditOpen(true) },
-    {
+  const menu = normalizeMenuItems([
+    write && { label: 'Edit project…', icon: <Pencil />, onSelect: () => setEditOpen(true) },
+    write && {
       label: 'Status',
       icon: (() => {
         const Icon = lifecycleMeta('project', project.status).icon;
@@ -134,15 +140,16 @@ function ProjectChrome({
         };
       }),
     },
-    project.status === 'archived'
-      ? { label: 'Unarchive project', icon: <ArchiveRestore />, onSelect: () => void setStatus('active') }
-      : { label: 'Archive project', icon: <Archive />, onSelect: () => void setStatus('archived') },
+    write &&
+      (project.status === 'archived'
+        ? { label: 'Unarchive project', icon: <ArchiveRestore />, onSelect: () => void setStatus('active') }
+        : { label: 'Archive project', icon: <Archive />, onSelect: () => void setStatus('archived') }),
     { separator: true },
-    { label: 'New milestone…', icon: <MilestoneIcon />, onSelect: hierarchy.newMilestone },
-    { label: 'New epic…', icon: <Plus />, onSelect: () => hierarchy.newEpic(null) },
+    write && { label: 'New milestone…', icon: <MilestoneIcon />, onSelect: hierarchy.newMilestone },
+    write && { label: 'New epic…', icon: <Plus />, onSelect: () => hierarchy.newEpic(null) },
     { separator: true },
-    { label: 'Delete project…', icon: <Trash2 />, danger: true, onSelect: () => setDeleteTarget(project) },
-  ];
+    deleteProjects && { label: 'Delete project…', icon: <Trash2 />, danger: true, onSelect: () => setDeleteTarget(project) },
+  ]);
 
   const header = (
     <PageHeader
@@ -154,8 +161,8 @@ function ProjectChrome({
           <LifecycleBadge kind="project" status={project.status} />
         </span>
       }
-      backTo="/projects"
-      breadcrumbs={[{ label: 'Projects', to: '/projects' }]}
+      backTo={sp('/projects')}
+      breadcrumbs={[{ label: 'Projects', to: sp('/projects') }]}
       actions={
         descriptionToggle ? (
           <IconButton
@@ -196,7 +203,7 @@ function ProjectChrome({
         onClose={() => setDeleteTarget(null)}
         onDeleting={() => (deletingRef.current = project.id)}
         onFailed={() => (deletingRef.current = null)}
-        onDeleted={() => navigate('/projects', { replace: true })}
+        onDeleted={() => navigate(sp('/projects'), { replace: true })}
       />
     </>
   );

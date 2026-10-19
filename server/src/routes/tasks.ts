@@ -10,7 +10,6 @@ import {
   taskUpdateInput,
 } from '@shared/schemas';
 import type { TaskDTO, TaskQueryResult } from '@shared/types';
-import { currentUser } from '../auth/context';
 import type { AppEnv, Deps } from '../env';
 import { notFound } from '../http/errors';
 import { readId, readJson } from '../http/validate';
@@ -23,6 +22,7 @@ import {
   updateTask,
 } from '../services/taskMutations';
 import { findTaskByRef, getTaskDTO, queryTasks } from '../services/tasks';
+import { currentUser } from '../space/context';
 
 export function taskRoutes({ db }: Deps) {
   const r = new Hono<AppEnv>();

@@ -2,7 +2,7 @@
 // (handy in a Windows shortcut, where variables can't be set), and wins over it.
 
 export interface DesktopArgs {
-  /** serve (default), backup, reset-password, stop, help */
+  /** serve (default), backup, restore, reset-password, promote-admin, policy, spaces, stop, help */
   command: string;
   /** Positional arguments after the command. */
   args: string[];

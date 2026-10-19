@@ -1,5 +1,8 @@
 // Task work log ("log activity"): total vs estimate, a "Log time" form that reads durations
-// like "1h 30m" / "90" / "1.5h" / "1:30", and the entries (newest first) with edit/delete.
+// like "1h 30m" / "90" / "1.5h" / "1:30", and the entries (newest first) with edit/delete. As for
+// comments, the role decides (app/permissions.ts entryActions; viewers only read), authors who
+// left the space or were deleted say so (lib/people.ts, design §12.9), and an imported entry says
+// who imported it (ImportedNote).
 
 import { useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
@@ -12,6 +15,8 @@ import type { TaskDTO, WorklogDTO } from '@shared/types';
 import { ApiError } from '../../api/client';
 import { useLookups } from '../../api/bootstrap';
 import { useAddWorklog, useDeleteWorklog, useUpdateWorklog } from '../../api/timeline';
+import { entryActions, type EntryActions } from '../../app/permissions';
+import { useSpace, useSpaceId } from '../../app/space';
 import { useSharedToday } from '../../components/domain';
 import {
   Button,
@@ -27,6 +32,8 @@ import {
   useConfirm,
 } from '../../components/ui';
 import { formatDate, formatEstimate } from '../../lib/format';
+import { personLabel } from '../../lib/people';
+import { ImportedNote } from './ImportedNote';
 import { clearDraft, readJsonDraft, writeDraft } from './drafts';
 import { isGoneError, stillInTimeline, worklogLeaveInput } from './leaveSave';
 import {
@@ -52,8 +59,9 @@ function isFormDraft(v: unknown): v is WorklogFormValues {
 }
 
 export function WorklogPanel({ task, worklogs }: WorklogPanelProps) {
-  const { user } = useLookups();
-  const [formOpen, setFormOpen] = useState(() => readJsonDraft('worklog', task.id, isFormDraft) !== null);
+  const { id: sid, permissions } = useSpace();
+  const { user, personById } = useLookups();
+  const [formOpen, setFormOpen] = useState(() => permissions.write && readJsonDraft(sid, 'worklog', task.id, isFormDraft) !== null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const total = worklogs ? worklogs.reduce((sum, w) => sum + (w.minutes ?? 0), 0) : task.worklogMinutes;
   // Newest work first: the entry just logged appears right under the form.
@@ -62,7 +70,7 @@ export function WorklogPanel({ task, worklogs }: WorklogPanelProps) {
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <WorklogSummary task={task} totalMinutes={total}>
-        {!formOpen && (
+        {!formOpen && permissions.write && (
           <Button
             size="sm"
             variant="primary"
@@ -82,7 +90,11 @@ export function WorklogPanel({ task, worklogs }: WorklogPanelProps) {
       {entries === undefined ? (
         <SkeletonList rows={2} withIcon={false} />
       ) : entries.length === 0 ? (
-        !formOpen && <p className="py-1 text-sm text-fg-muted">No time logged yet. Use “Log time” to record work on this task.</p>
+        !formOpen && (
+          <p className="py-1 text-sm text-fg-muted">
+            {permissions.write ? 'No time logged yet. Use “Log time” to record work on this task.' : 'No time logged yet.'}
+          </p>
+        )
       ) : (
         <ol aria-label="Work log entries" className="flex min-w-0 flex-col divide-y divide-border border-y border-border">
           {entries.map((w) => (
@@ -95,7 +107,7 @@ export function WorklogPanel({ task, worklogs }: WorklogPanelProps) {
                 <WorklogEntry
                   entry={w}
                   taskId={task.id}
-                  canEdit={w.author?.id === user.id}
+                  can={entryActions(permissions, w, user.id, personById)}
                   showAuthor={w.author?.id !== user.id}
                   onEdit={() => {
                     setFormOpen(false);
@@ -159,12 +171,14 @@ function WorklogSummary({ task, totalMinutes, children }: { task: TaskDTO; total
 interface WorklogEntryProps {
   entry: WorklogDTO;
   taskId: number;
-  canEdit: boolean;
+  can: EntryActions;
   showAuthor: boolean;
   onEdit: () => void;
 }
 
-function WorklogEntry({ entry, taskId, canEdit, showAuthor, onEdit }: WorklogEntryProps) {
+function WorklogEntry({ entry, taskId, can, showAuthor, onEdit }: WorklogEntryProps) {
+  const { personById } = useLookups();
+  const author = personLabel(entry.author, personById);
   const remove = useDeleteWorklog(taskId);
   const confirm = useConfirm();
   const today = useSharedToday();
@@ -172,7 +186,7 @@ function WorklogEntry({ entry, taskId, canEdit, showAuthor, onEdit }: WorklogEnt
 
   const del = async () => {
     const ok = await confirm({
-      title: 'Delete this work log entry?',
+      title: showAuthor ? `Delete ${author.name}’s work log entry?` : 'Delete this work log entry?',
       body: duration ? `${duration} on ${formatDate(entry.date, today)} will no longer count towards this task.` : 'This can’t be undone.',
       confirmLabel: 'Delete',
       danger: true,
@@ -193,18 +207,24 @@ function WorklogEntry({ entry, taskId, canEdit, showAuthor, onEdit }: WorklogEnt
           <time dateTime={entry.date} className="text-[13px] text-fg-muted">
             {formatDate(entry.date, today)}
           </time>
-          {showAuthor && <span className="min-w-0 truncate text-[13px] text-fg-muted">· {entry.author?.displayName ?? 'Unknown user'}</span>}
+          {showAuthor && (
+            <span className={clsx('min-w-0 truncate text-[13px] text-fg-muted', author.gone && 'italic')}>
+              · {author.name}
+              {author.note && ` ${author.note}`}
+            </span>
+          )}
         </p>
         {entry.note && <p className="mt-0.5 whitespace-pre-wrap break-words text-[13px] text-fg">{entry.note}</p>}
+        <ImportedNote entry={entry} className="mt-0.5" />
       </div>
-      {canEdit && (
+      {(can.edit || can.delete) && (
         <Menu
           label="Work log entry actions"
           trigger={<IconButton aria-label="Work log entry actions" icon={<MoreHorizontal />} size="sm" loading={remove.isPending} className="-mr-1.5 shrink-0" />}
           items={[
-            { label: 'Edit', icon: <Pencil />, onSelect: onEdit },
+            can.edit && { label: 'Edit', icon: <Pencil />, onSelect: onEdit },
             { separator: true },
-            { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => void del() },
+            can.delete && { label: 'Delete…', icon: <Trash2 />, danger: true, onSelect: () => void del() },
           ]}
         />
       )}
@@ -222,6 +242,7 @@ interface WorklogFormProps {
 }
 
 function WorklogForm({ taskId, entry, onClose: close }: WorklogFormProps) {
+  const sid = useSpaceId();
   const today = useSharedToday();
   const qc = useQueryClient();
   const add = useAddWorklog(taskId);
@@ -231,7 +252,7 @@ function WorklogForm({ taskId, entry, onClose: close }: WorklogFormProps) {
   const [values, setValues] = useState<WorklogFormValues>(() =>
     entry
       ? { date: entry.date, duration: durationText(entry.minutes), note: entry.note }
-      : (readJsonDraft('worklog', taskId, isFormDraft) ?? { date: today, duration: '', note: '' }),
+      : (readJsonDraft(sid, 'worklog', taskId, isFormDraft) ?? { date: today, duration: '', note: '' }),
   );
   const [errors, setErrors] = useState<WorklogFormErrors>({});
   const [durationTouched, setDurationTouched] = useState(false);
@@ -246,14 +267,14 @@ function WorklogForm({ taskId, entry, onClose: close }: WorklogFormProps) {
     closed.current = true;
     close();
   };
-  const latest = useRef({ values, entry, pending, save: update.mutateAsync, qc, taskId });
-  latest.current = { values, entry, pending, save: update.mutateAsync, qc, taskId };
+  const latest = useRef({ values, entry, pending, save: update.mutateAsync, qc, sid, taskId });
+  latest.current = { values, entry, pending, save: update.mutateAsync, qc, sid, taskId };
   useEffect(
     () => () => {
       const l = latest.current;
       if (!l.entry || closed.current || l.pending) return;
       const input = worklogLeaveInput(l.values, l.entry);
-      if (!input || !stillInTimeline(l.qc, l.taskId, 'worklogs', l.entry.id)) return;
+      if (!input || !stillInTimeline(l.qc, l.sid, l.taskId, 'worklogs', l.entry.id)) return;
       l.save({ id: l.entry.id, ...input }).catch((err: unknown) => {
         if (!isGoneError(err)) toast.error(err);
       });
@@ -264,7 +285,7 @@ function WorklogForm({ taskId, entry, onClose: close }: WorklogFormProps) {
   const set = (patch: Partial<WorklogFormValues>) => {
     setValues((prev) => {
       const next = { ...prev, ...patch };
-      if (!entry) writeDraft('worklog', taskId, next.duration.trim() || next.note.trim() ? JSON.stringify(next) : '');
+      if (!entry) writeDraft(sid, 'worklog', taskId, next.duration.trim() || next.note.trim() ? JSON.stringify(next) : '');
       return next;
     });
     setErrors((prev) => {
@@ -282,7 +303,7 @@ function WorklogForm({ taskId, entry, onClose: close }: WorklogFormProps) {
     if (!entry && (values.duration.trim() !== '' || values.note.trim() !== '')) {
       const discard = await confirm({ title: 'Discard this entry?', confirmLabel: 'Discard', danger: true });
       if (!discard) return;
-      clearDraft('worklog', taskId);
+      clearDraft(sid, 'worklog', taskId);
     }
     onClose();
   };
@@ -313,7 +334,7 @@ function WorklogForm({ taskId, entry, onClose: close }: WorklogFormProps) {
     } else {
       // mutateAsync so the draft is cleared even if the drawer moved on to another task.
       add.mutateAsync(input).then((saved) => {
-        clearDraft('worklog', taskId);
+        clearDraft(sid, 'worklog', taskId);
         toast.success(saved.minutes ? `Logged ${formatMinutes(saved.minutes)}` : 'Note added to the work log');
         onClose();
       }, onApiError);

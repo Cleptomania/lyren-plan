@@ -1,33 +1,52 @@
-// The bootstrap payload holds all small, frequently-needed lists. Components read
-// it through useLookups(), which adds id->entity maps and sorted views.
+// The bootstrap payload of a space holds all its small, frequently-needed lists. Components read
+// it through useLookups(), which adds id->entity maps and sorted views, and merges the
+// account's preferences (AuthStatusDTO.preferences) into the space's settings.
 
 import { useQuery } from '@tanstack/react-query';
 import { localToday } from '@shared/dates';
-import type { Settings } from '@shared/schemas';
+import { spacePermissions, type SpacePermissions } from '@shared/roles';
+import { DEFAULT_PREFERENCES, type Settings, type UserPreferences } from '@shared/schemas';
 import type {
   BoardDTO,
   BootstrapDTO,
   EpicDTO,
   MilestoneDTO,
+  PersonDTO,
   ProjectDTO,
+  SpaceInfoDTO,
   StatusDTO,
   TagDTO,
-  UserDTO,
+  UserRef,
 } from '@shared/types';
-import { http } from './client';
+import { useSpaceId } from '../app/space';
+import { useAuthStatus } from './auth';
+import { spaceApi } from './client';
 import { qk } from './keys';
 
-export function useBootstrap(enabled = true) {
-  return useQuery({
-    queryKey: qk.bootstrap,
-    queryFn: () => http.get<BootstrapDTO>(`/bootstrap?today=${localToday()}`),
+/** The query options of a space's bootstrap (SpaceLayout loads it; useLookups reads it). */
+export function bootstrapQuery(spaceId: string) {
+  return {
+    queryKey: qk.bootstrap(spaceId),
+    queryFn: () => spaceApi(spaceId).get<BootstrapDTO>(`/bootstrap?today=${localToday()}`),
     staleTime: 30_000,
-    enabled,
-  });
+  };
+}
+
+export function useBootstrap(spaceId: string, enabled = true) {
+  return useQuery({ ...bootstrapQuery(spaceId), enabled });
 }
 
 export interface Lookups {
-  user: UserDTO;
+  /** The viewer (the account itself: useAccount). */
+  user: UserRef;
+  /** The space as its bootstrap names it, with the viewer's role. */
+  space: SpaceInfoDTO;
+  /** What the viewer's role may do here (the space context's, as of this bootstrap). */
+  permissions: SpacePermissions;
+  /** Everyone the space's content can name: members, former members, placeholders (by display name). */
+  people: PersonDTO[];
+  personById: Map<number, PersonDTO>;
+  /** The space's settings and the account's preferences. */
   settings: Settings;
   version: string;
   /** Ordered by position. */
@@ -66,7 +85,7 @@ function groupBy<T, K>(items: T[], key: (t: T) => K): Map<K, T[]> {
   return m;
 }
 
-export function buildLookups(b: BootstrapDTO): Lookups {
+export function buildLookups(b: BootstrapDTO, preferences: UserPreferences | null = null): Lookups {
   const statuses = [...b.statuses].sort((x, y) => x.position - y.position || x.id - y.id);
   const projects = [...b.projects].sort((x, y) => x.position - y.position || x.id - y.id);
   const projectOrder = new Map(projects.map((p, i) => [p.id, i]));
@@ -93,7 +112,11 @@ export function buildLookups(b: BootstrapDTO): Lookups {
   }
   return {
     user: b.user,
-    settings: b.settings,
+    space: b.space,
+    permissions: spacePermissions(b.space.role),
+    people: b.people,
+    personById: new Map(b.people.map((p) => [p.id, p])),
+    settings: { ...DEFAULT_PREFERENCES, ...b.settings, ...preferences },
     version: b.version,
     statuses,
     tags,
@@ -114,24 +137,25 @@ export function buildLookups(b: BootstrapDTO): Lookups {
   };
 }
 
-const lookupsCache = new WeakMap<BootstrapDTO, Lookups>();
+const lookupsCache = new WeakMap<BootstrapDTO, { preferences: UserPreferences | null; lookups: Lookups }>();
 
-/** Memoized per bootstrap payload: every component shares one Lookups object. */
-export function getLookups(b: BootstrapDTO): Lookups {
-  let l = lookupsCache.get(b);
-  if (!l) {
-    l = buildLookups(b);
-    lookupsCache.set(b, l);
+/** Memoized per bootstrap payload and preferences: every component shares one Lookups object. */
+export function getLookups(b: BootstrapDTO, preferences: UserPreferences | null = null): Lookups {
+  let entry = lookupsCache.get(b);
+  if (!entry || entry.preferences !== preferences) {
+    entry = { preferences, lookups: buildLookups(b, preferences) };
+    lookupsCache.set(b, entry);
   }
-  return l;
+  return entry.lookups;
 }
 
 /**
- * Lookups from the bootstrap cache. Only call inside the authenticated app shell,
- * which renders children after bootstrap has loaded — so this never returns undefined there.
+ * Lookups from the space's bootstrap cache. Only call inside a space (SpaceLayout), which renders
+ * its pages once their bootstrap has loaded — so this never throws there.
  */
 export function useLookups(): Lookups {
-  const { data } = useBootstrap();
+  const { data } = useBootstrap(useSpaceId());
+  const preferences = useAuthStatus().data?.preferences ?? null;
   if (!data) throw new Error('useLookups() used before bootstrap data loaded');
-  return getLookups(data);
+  return getLookups(data, preferences);
 }

@@ -1,4 +1,5 @@
-// Centered card layout shared by the sign-in and first-run setup screens.
+// Centered card layout shared by the sign-in, first-run setup and public pages (sign-up, password reset,
+// email confirmation, recovery, invitations), with their form-level messages.
 
 import { clsx } from 'clsx';
 import type { ReactNode } from 'react';
@@ -45,3 +46,26 @@ export function FormAlert({ children }: { children: ReactNode }) {
     </div>
   );
 }
+
+/** Form-level confirmation (a link was sent, a password changed). */
+export function FormNotice({ children }: { children: ReactNode }) {
+  return (
+    <div role="status" className="rounded-md border border-success/30 bg-success-soft px-3 py-2 text-sm text-fg">
+      {children}
+    </div>
+  );
+}
+
+/** "or" between two ways of doing the same (a password, or a passkey). */
+export function OrDivider() {
+  return (
+    <div className="flex items-center gap-3 text-xs text-fg-subtle" aria-hidden>
+      <span className="h-px flex-1 bg-border" />
+      or
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+/** A plain link in the auth pages' text. */
+export const AUTH_LINK = 'font-medium text-accent hover:underline';

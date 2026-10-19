@@ -1,7 +1,8 @@
 // Task description: rendered Markdown; clicking it (or "Edit") opens the MarkdownEditor.
 // Saves on blur, mod+Enter and Esc (Esc leaves the editor like a blur does, so a second Esc
 // closes the drawer with the text kept); only the Cancel button discards, after asking when
-// there are changes. A failed save reopens the editor with the draft.
+// there are changes. A failed save reopens the editor with the draft. Read-only for a role that may
+// not change tasks (design §12.9).
 
 import { clsx } from 'clsx';
 import { Pencil } from 'lucide-react';
@@ -14,9 +15,11 @@ import { Button, IconButton, Markdown, MarkdownEditor, useConfirm } from '../../
 export interface TaskDescriptionProps {
   task: TaskDTO;
   save: (patch: TaskUpdateInput) => Promise<TaskDTO>;
+  /** Show the description only (viewers). */
+  readOnly?: boolean;
 }
 
-export function TaskDescription({ task, save }: TaskDescriptionProps) {
+export function TaskDescription({ task, save, readOnly = false }: TaskDescriptionProps) {
   const confirm = useConfirm();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(task.description);
@@ -102,11 +105,19 @@ export function TaskDescription({ task, save }: TaskDescriptionProps) {
         <h2 id={headingId} className="text-[13px] font-semibold text-fg-muted">
           Description
         </h2>
-        {!editing && task.description && (
+        {!editing && !readOnly && task.description && (
           <IconButton size="sm" aria-label="Edit description" icon={<Pencil />} onClick={start} />
         )}
       </div>
-      {editing ? (
+      {readOnly ? (
+        task.description ? (
+          <div className="min-w-0 py-1 text-sm">
+            <Markdown source={task.description} />
+          </div>
+        ) : (
+          <p className="py-1 text-sm text-fg-subtle">No description.</p>
+        )
+      ) : editing ? (
         <div onBlur={onBlur}>
           <MarkdownEditor
             value={draft}

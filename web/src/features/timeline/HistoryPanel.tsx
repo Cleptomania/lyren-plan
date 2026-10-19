@@ -1,5 +1,6 @@
 // Task history: the task's own activity (oldest → newest) as sentences, with consecutive
-// edits by the same person within a few minutes grouped together. Shows the latest 20.
+// edits by the same person within a few minutes grouped together (an imported run says who imported
+// it). Shows the latest 20.
 
 import { History } from 'lucide-react';
 import { useState } from 'react';
@@ -10,6 +11,7 @@ import { Button, SkeletonList } from '../../components/ui';
 import { pluralize } from '../../lib/format';
 import { groupActivityRuns, type ActivityRun } from './activityGroups';
 import { activityPhrases, actorName, type ActivityTextLookups } from './activityText';
+import { ImportedNote } from './ImportedNote';
 import { RelativeTime } from './RelativeTime';
 
 export const HISTORY_INITIAL = 20;
@@ -55,16 +57,22 @@ export function HistoryPanel({ entries }: HistoryPanelProps) {
 
 function HistoryRun({ run, lookups }: { run: ActivityRun; lookups: ActivityTextLookups }) {
   const phrases = run.entries.flatMap((e) => activityPhrases(e, lookups).map((text, i) => ({ key: `${e.id}.${i}`, text })));
-  const name = actorName(run.entries[0]!);
+  const first = run.entries[0]!;
+  const name = actorName(first);
   const time = <RelativeTime iso={run.lastAt} className="text-fg-subtle" />;
+  // A run is one person's: an imported one says who imported it (design §8.6).
+  const imported = <ImportedNote entry={{ author: run.actor, importedBy: first.importedBy, importedAt: first.importedAt }} className="mt-0.5" />;
 
   return (
     <li className="flex min-w-0 gap-2.5 py-1.5">
       <UserAvatar user={run.actor} size="xs" className="mt-0.5" />
       {phrases.length === 1 ? (
-        <p className="min-w-0 flex-1 break-words text-[13px] leading-5 text-fg-muted">
-          <span className="font-medium text-fg">{name}</span> {phrases[0]!.text} <span aria-hidden>·</span> {time}
-        </p>
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-[13px] leading-5 text-fg-muted">
+            <span className="font-medium text-fg">{name}</span> {phrases[0]!.text} <span aria-hidden>·</span> {time}
+          </p>
+          {imported}
+        </div>
       ) : (
         <div className="min-w-0 flex-1 text-[13px] leading-5">
           <p className="text-fg-muted">
@@ -77,6 +85,7 @@ function HistoryRun({ run, lookups }: { run: ActivityRun; lookups: ActivityTextL
               </li>
             ))}
           </ul>
+          {imported}
         </div>
       )}
     </li>

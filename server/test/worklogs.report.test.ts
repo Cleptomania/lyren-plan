@@ -82,9 +82,9 @@ describe('GET /api/worklogs', () => {
 
   it('embeds the task (current ref/title/project) and the author', async () => {
     const ctx = await reportContext();
-    const guest = secondUser(ctx, 'Robin');
+    const guest = await secondUser(ctx, 'Robin');
     insertWorklog(ctx.db, { taskId: ctx.taskId, userId: guest.userId, date: TODAY, minutes: 15, note: 'Pairing' });
-    ctx.db.run("UPDATE tasks SET title = 'Renamed' WHERE id = :id", { id: ctx.taskId });
+    ctx.db.run("UPDATE tasks SET title = 'Renamed', title_fold = 'renamed' WHERE id = :id", { id: ctx.taskId });
     const res = await ctx.client.get<WorklogReportDTO>(`/api/worklogs?today=${TODAY}`);
     expect(res.body.items).toHaveLength(1);
     expect(res.body.items[0]).toMatchObject({

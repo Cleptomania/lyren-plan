@@ -1,5 +1,6 @@
 # docker compose up -d   →   http://localhost:8080
 # First run: `docker compose logs lyren` shows the one-time setup code.
+# Every variable: README → Configuration. Replace plan.example.com and example.com with your own.
 services:
   lyren:
     build: .
@@ -13,13 +14,40 @@ services:
     volumes:
       # Named volume (permissions handled automatically). For a bind mount use e.g.
       # ./data:/data after `mkdir data && sudo chown 1000:1000 data`.
+      # /data holds lyren.db (the accounts), spaces/ (one database per space) and backups/.
       - lyren-data:/data
+    # Secrets (SMTP_PASS, RESEND_API_KEY, SETUP_TOKEN, RECOVERY_TOKEN) go in a file that is not committed and
+    # only you can read (`install -m 600 /dev/null lyren-secrets.env`; .gitignore and .dockerignore leave out
+    # *.env files), one NAME=value per line:
+    #   SMTP_PASS=your-mail-password
+    # env_file:
+    #   - lyren-secrets.env
     environment:
       # Set to "true" when running behind a TLS-terminating reverse proxy (Caddy, nginx, Traefik).
       TRUST_PROXY: "false"
       # auto = Secure cookies when the request is HTTPS.
       COOKIE_SECURE: "auto"
-      # Optional fixed first-run setup code (otherwise a random one is printed to the log).
+      # The address people open. Links in mail and copied invitation links use it, and passkeys need it
+      # (an https address, so behind a reverse proxy).
+      # PUBLIC_URL: "https://plan.example.com"
+      # Optional: passkeys for every host of your domain, not only PUBLIC_URL's.
+      # WEBAUTHN_RP_ID: "example.com"
+      # INSTANCE_NAME: "Lyren Plan"
+      # Who can create an account: invite_only (default), closed, or open (needs mail). Read once, when
+      # the data is created; afterwards Administration → Settings decides.
+      # SIGNUP_POLICY: "invite_only"
+      # Mail: nothing is sent until MAIL_TRANSPORT is set (log = one line per message in the log).
+      # MAIL_TRANSPORT: "smtp"
+      # MAIL_FROM: "plan@example.com"
+      # SMTP_HOST: "smtp.example.com"
+      # SMTP_SECURITY: "tls"             # tls (port 465) or starttls (587)
+      # SMTP_PORT: "465"
+      # SMTP_USER: "plan@example.com"     # SMTP_PASS in the env_file above
+      # Or Resend (RESEND_API_KEY in the env_file above):
+      # MAIL_TRANSPORT: "resend"
+      # MAIL_DAILY_CAP: "90"
+      # Optional fixed first-run setup code (otherwise a random one is printed to the log); better in the
+      # env_file above, so that it stays out of this file.
       # SETUP_TOKEN: "choose-something"
       # Automatic pre-import / pre-upgrade snapshots of each kind kept in /data/backups
       # (default 10; 0 keeps all). Your own backups there are never deleted.

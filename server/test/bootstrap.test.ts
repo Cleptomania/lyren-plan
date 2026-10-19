@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS } from '@shared/schemas';
+import { DEFAULT_SPACE_SETTINGS } from '@shared/schemas';
 import type { BootstrapDTO } from '@shared/types';
 import { insertEpic, insertMilestone, insertProject, insertTag, insertTask, statusIdByName } from './services.fixtures';
 import { createTestContext } from './helpers';
@@ -13,13 +13,17 @@ describe('GET /api/bootstrap', () => {
 
   it('returns the lookup lists of a fresh install', async () => {
     const ctx = createTestContext();
-    const { client, user } = await ctx.signedIn();
+    const { client, user, spaceId } = await ctx.signedIn();
     const res = await client.get<BootstrapDTO>('/api/bootstrap');
     expect(res.status).toBe(200);
     const b = res.body;
-    expect(b.user).toEqual(user);
+    // §7.3: the viewer is a UserRef, the space and its people are new, and settings are the space's only
+    // (the preferences moved to the account, §3.6).
+    expect(b.user).toEqual({ id: user.id, displayName: user.displayName });
+    expect(b.space).toEqual({ id: spaceId, name: "Owner's space", role: 'owner' });
+    expect(b.people).toEqual([{ id: user.id, displayName: 'Owner', kind: 'account', isMember: true, deleted: false }]);
     expect(typeof b.version).toBe('string');
-    expect(b.settings).toEqual({ ...DEFAULT_SETTINGS, defaultBoardId: b.boards[0]!.id });
+    expect(b.settings).toEqual({ ...DEFAULT_SPACE_SETTINGS, defaultBoardId: b.boards[0]!.id });
     expect(b.statuses.map((s) => s.name)).toEqual(['Backlog', 'Todo', 'In Progress', 'In Review', 'Done', 'Cancelled']);
     expect(b.statuses[0]).toEqual({ id: b.statuses[0]!.id, name: 'Backlog', category: 'backlog', color: '#94a3b8', position: 0, taskCount: 0 });
     expect(b.tags).toEqual([]);

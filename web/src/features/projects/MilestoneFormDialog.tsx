@@ -6,6 +6,7 @@ import { LIMITS, MILESTONE_STATUSES, MILESTONE_STATUS_LABELS, type MilestoneStat
 import { milestoneCreateInput, milestoneUpdateInput, type MilestoneUpdateInput } from '@shared/schemas';
 import type { MilestoneDTO } from '@shared/types';
 import { useCreateMilestone, useUpdateMilestone } from '../../api/projects';
+import { useSpaceId } from '../../app/space';
 import { DateField } from '../../components/domain';
 import {
   Button,
@@ -51,6 +52,7 @@ export const DATE_ORDER_ERROR = 'Due date must be on or after the start date';
 const STATUS_OPTIONS = MILESTONE_STATUSES.map((s) => ({ value: s, label: MILESTONE_STATUS_LABELS[s] }));
 
 export function MilestoneFormDialog({ open, onClose, projectId, milestone }: MilestoneFormDialogProps) {
+  const sid = useSpaceId();
   const navigate = useNavigate();
   const create = useCreateMilestone();
   const update = useUpdateMilestone();
@@ -90,7 +92,7 @@ export function MilestoneFormDialog({ open, onClose, projectId, milestone }: Mil
       create.mutate(parsed.data, {
         onSuccess: (created) => {
           toast.success(`Milestone “${created.name}” created`, {
-            action: { label: 'Open', onClick: () => navigate(milestoneUrl(created.projectId, created.id)) },
+            action: { label: 'Open', onClick: () => navigate(milestoneUrl(sid, created.projectId, created.id)) },
           });
           onClose();
         },

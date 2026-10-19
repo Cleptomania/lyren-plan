@@ -8,7 +8,8 @@
 // and LYREN_NODE_PINNED_ONLY=1 (.github/workflows/release.yml). Other versions fall back to
 // SHASUMS256.txt fetched from https://nodejs.org (see node-dist.mjs).
 //
-// v24.19.0: SHASUMS256.txt signed by 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 (Antoine du Hamel).
+// v24.19.0: SHASUMS256.txt signed by 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 (a Node.js release key, as listed
+// in the README of github.com/nodejs/node).
 
 export const PINNED_SHA256 = {
   'v24.19.0': {

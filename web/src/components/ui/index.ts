@@ -21,6 +21,7 @@ export { ColorDot, type ColorDotProps } from './ColorDot';
 export { ColorPicker, type ColorPickerProps } from './ColorPicker';
 export { ConfirmDialog, ConfirmHost, confirm, useConfirm, type ConfirmDialogProps, type ConfirmOptions } from './ConfirmDialog';
 export { CONTROL_HEIGHTS, CONTROL_SURFACE, CONTROL_SURFACE_WITHIN, controlClasses, type ControlSize } from './controlStyles';
+export { CopyField, type CopyFieldProps } from './CopyField';
 export { DateInput, type DateInputProps } from './DateInput';
 export { Dialog, SheetHandle, type DialogMobileLayout, type DialogProps, type DialogSize } from './Dialog';
 export { Disclosure, type DisclosureProps } from './Disclosure';
@@ -51,6 +52,7 @@ export {
 export { Popover, type PopoverProps } from './Popover';
 export { ProgressBar, type ProgressBarProps } from './ProgressBar';
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from './SegmentedControl';
+export { ShareLinkField, type ShareLinkFieldProps } from './ShareLinkField';
 export { Select, type SelectOption, type SelectProps } from './Select';
 export { Sheet, type SheetProps } from './Sheet';
 export { formatShortcut, formatShortcutKeys, isApplePlatform } from './shortcuts';

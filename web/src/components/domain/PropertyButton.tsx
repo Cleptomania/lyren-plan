@@ -1,5 +1,6 @@
 // Default trigger of the domain pickers: a quiet, left-aligned button showing the current
-// value (icon + text), like a property row in a side panel. 40px tall on phones.
+// value (icon + text), like a property row in a side panel. 40px tall on phones. `readOnly` shows the
+// value without opening anything, undimmed (a role that may not change it, design §12.9).
 
 import { clsx } from 'clsx';
 import { ChevronDown } from 'lucide-react';
@@ -19,22 +20,28 @@ export interface PropertyButtonProps extends ButtonHTMLAttributes<HTMLButtonElem
   bordered?: boolean;
   /** Text color for a value that needs attention (e.g. an overdue date). */
   tone?: 'danger' | 'warning';
+  /** The value only: disabled, but not dimmed, and without hover or chevron. */
+  readOnly?: boolean;
 }
 
 export const PropertyButton = forwardRef<HTMLButtonElement, PropertyButtonProps>(function PropertyButton(
-  { icon, placeholder, fullWidth, chevron, size = 'sm', bordered, tone, className, children, type, ...rest },
+  { icon, placeholder, fullWidth, chevron, size = 'sm', bordered, tone, readOnly, className, children, type, disabled, ...rest },
   ref,
 ) {
   return (
     <button
       ref={ref}
       type={type ?? 'button'}
+      disabled={disabled || readOnly}
       className={clsx(
         'inline-flex min-w-0 max-w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors',
-        'h-10 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50',
+        'h-10 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:pointer-events-none',
+        !readOnly && 'disabled:opacity-50',
         'aria-expanded:bg-surface-2 [&_svg]:shrink-0',
         size === 'sm' ? 'md:h-8 md:text-[13px]' : 'md:h-9',
-        bordered ? 'border border-border bg-surface shadow-card hover:border-border-strong' : 'hover:bg-surface-2 active:bg-surface-3',
+        bordered
+          ? clsx('border border-border bg-surface shadow-card', !readOnly && 'hover:border-border-strong')
+          : !readOnly && 'hover:bg-surface-2 active:bg-surface-3',
         tone === 'danger' ? 'text-danger' : tone === 'warning' ? 'text-warning' : placeholder ? 'text-fg-subtle' : 'text-fg',
         fullWidth && 'w-full',
         className,
@@ -50,7 +57,7 @@ export const PropertyButton = forwardRef<HTMLButtonElement, PropertyButtonProps>
         {/* A bare text node is an anonymous flex item, which clips without an ellipsis. */}
         {typeof children === 'string' ? <span className="truncate">{children}</span> : children}
       </span>
-      {chevron && <ChevronDown aria-hidden className="size-4 text-fg-subtle" />}
+      {chevron && !readOnly && <ChevronDown aria-hidden className="size-4 text-fg-subtle" />}
     </button>
   );
 });

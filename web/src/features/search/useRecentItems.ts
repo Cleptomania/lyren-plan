@@ -9,9 +9,10 @@ import { useEffect, useMemo, useState } from 'react';
 import type { TaskQueryInput } from '@shared/schemas';
 import type { TaskQueryResult } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
-import { http } from '../../api/client';
+import { spaceApi } from '../../api/client';
 import { qk } from '../../api/keys';
 import { findCachedTask } from '../../api/tasks';
+import { useSpaceId } from '../../app/space';
 import { resolveRecents } from './paletteModel';
 import { loadRecent, refreshRecentTasks, type RecentItem, type RecentTaskUpdate } from './recent';
 
@@ -21,14 +22,15 @@ export function recentTasksQuery(ids: readonly number[]): TaskQueryInput {
 }
 
 export function useRecentItems(): RecentItem[] {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const lookups = useLookups();
-  const [stored] = useState(loadRecent);
+  const [stored] = useState(() => loadRecent(sid));
   const taskIds = useMemo(() => stored.flatMap((r) => (r.kind === 'task' ? [r.id] : [])), [stored]);
   const input = useMemo(() => recentTasksQuery(taskIds), [taskIds]);
   const answer = useQuery({
-    queryKey: qk.taskQuery(input),
-    queryFn: () => http.post<TaskQueryResult>('/tasks/query', input),
+    queryKey: qk.taskQuery(sid, input),
+    queryFn: () => spaceApi(sid).post<TaskQueryResult>('/tasks/query', input),
     enabled: taskIds.length > 0,
     // Ask again on every opening.
     staleTime: 0,
@@ -46,11 +48,11 @@ export function useRecentItems(): RecentItem[] {
     return map;
   }, [answer.data, taskIds]);
 
-  useEffect(() => refreshRecentTasks(updates), [updates]);
+  useEffect(() => refreshRecentTasks(sid, updates), [sid, updates]);
 
   return useMemo(() => {
     const live = stored.filter((r) => !(r.kind === 'task' && updates.get(r.id) === null));
-    return resolveRecents(live, lookups.boardById, (id) => findCachedTask(qc, id));
+    return resolveRecents(live, lookups.boardById, (id) => findCachedTask(qc, sid, id));
     // `answer.dataUpdatedAt`: the answer also lands in the cache findCachedTask reads.
-  }, [stored, updates, lookups.boardById, qc, answer.dataUpdatedAt]);
+  }, [stored, updates, lookups.boardById, qc, sid, answer.dataUpdatedAt]);
 }

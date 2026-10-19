@@ -21,6 +21,8 @@ export interface SegmentedControlProps<T extends string> {
   fullWidth?: boolean;
   /** Show only icons below md (labels stay accessible). */
   iconOnlyOnMobile?: boolean;
+  /** The whole group is read-only (the value still shows). */
+  disabled?: boolean;
   className?: string;
 }
 
@@ -33,10 +35,11 @@ export function SegmentedControl<T extends string>({
   size = 'md',
   fullWidth,
   iconOnlyOnMobile,
+  disabled,
   className,
 }: SegmentedControlProps<T>) {
   const ref = useRef<HTMLDivElement>(null);
-  const enabled = options.filter((o) => !o.disabled);
+  const enabled = disabled ? [] : options.filter((o) => !o.disabled);
   const onKeyDown = (e: KeyboardEvent) => {
     const idx = enabled.findIndex((o) => o.value === value);
     const delta = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
@@ -51,6 +54,7 @@ export function SegmentedControl<T extends string>({
       ref={ref}
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-disabled={disabled || undefined}
       onKeyDown={onKeyDown}
       className={clsx(
         'items-center gap-0.5 rounded-lg bg-surface-2 p-0.5',
@@ -68,7 +72,8 @@ export function SegmentedControl<T extends string>({
             aria-checked={checked}
             aria-label={o['aria-label']}
             tabIndex={checked ? 0 : -1}
-            disabled={o.disabled}
+            // The chosen value of a read-only group stays fully visible.
+            disabled={disabled || o.disabled}
             onClick={() => onChange(o.value)}
             className={clsx(
               'inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 font-medium transition-colors duration-150',
@@ -76,6 +81,7 @@ export function SegmentedControl<T extends string>({
               size === 'sm' ? 'h-9 text-[13px] md:h-7' : 'h-9 text-sm md:h-8',
               fullWidth && 'flex-1',
               checked ? 'bg-surface text-fg shadow-card' : 'text-fg-muted hover:text-fg',
+              disabled && checked && 'disabled:opacity-100',
             )}
           >
             {o.icon}

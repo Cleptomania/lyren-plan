@@ -1,5 +1,6 @@
 // Builds the shared task menu (SPEC §9.1): Open, Status ▸, Priority ▸, Due date ▸, Tags…,
-// Move to epic ▸, Move to project ▸, [caller's extra items], Duplicate, Archive, Delete.
+// Move to epic ▸, Move to project ▸, [caller's extra items], Duplicate, Archive, Delete. A role that
+// may not change tasks (design §12.9 viewer mode) gets Open and the caller's extra items only.
 // Pure apart from the React elements used as icons; actions go through `taskActions`.
 
 import {
@@ -46,6 +47,8 @@ export interface TaskActionItemsOptions {
   onDeleted?: (task: TaskDTO) => void;
   /** Inserted after the editing items, before Duplicate / Archive / Delete. */
   extra?: ExtraMenuItems;
+  /** Only what reads: Open and `extra` (callers then pass no editing extras). */
+  readOnly?: boolean;
 }
 
 function isItem(item: MenuItemInput): item is MenuItem {
@@ -71,6 +74,7 @@ export function buildTaskActionItems(
     const onOpen = options.onOpen;
     items.push({ label: 'Open', icon: <PanelRightOpen />, onSelect: () => (onOpen ? onOpen(task) : actions.open(task)) }, { separator: true });
   }
+  if (options.readOnly) return [...items, ...resolveExtraItems(options.extra, task)];
 
   items.push(statusItem(task, lookups.statuses, lookups.statusById.get(task.statusId), update));
   items.push({

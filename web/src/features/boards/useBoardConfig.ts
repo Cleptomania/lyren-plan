@@ -5,13 +5,15 @@
 // keepalive request, because the mutation pipeline awaits before its fetch and an unloading
 // page never gets that far.
 // Without a saved board (a project's Board tab before its first board exists) the first
-// change creates one via `create`.
+// change creates one via `create`. For a role that may not change boards (viewers, design §12.9) the
+// changes apply to this view only and are never sent (`saved: false`).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { BoardConfig } from '@shared/board';
 import type { BoardDTO } from '@shared/types';
 import { useUpdateBoard } from '../../api/boards';
-import { request } from '../../api/client';
+import { spaceApi } from '../../api/client';
+import { useSpace } from '../../app/space';
 import { toast } from '../../components/ui';
 
 const AUTOSAVE_DELAY_MS = 400;
@@ -23,6 +25,8 @@ export interface BoardConfigState {
   setConfig: (update: ConfigUpdate) => void;
   /** An edit is waiting for its debounce or creation. */
   dirty: boolean;
+  /** Edits are saved to the board (false: they last as long as this view). */
+  saved: boolean;
 }
 
 export function useBoardConfig(
@@ -31,13 +35,15 @@ export function useBoardConfig(
   create?: (config: BoardConfig) => Promise<BoardDTO>,
   onCreated?: (board: BoardDTO) => void,
 ): BoardConfigState {
+  const { id: sid, permissions } = useSpace();
+  const saved = permissions.write;
   const { mutate: updateBoard } = useUpdateBoard();
   const [pending, setPending] = useState<BoardConfig | null>(null);
   const config = pending ?? board?.config ?? fallback;
 
-  const latest = useRef({ board, pending, config, create, onCreated });
+  const latest = useRef({ board, pending, config, create, onCreated, saved });
   useLayoutEffect(() => {
-    latest.current = { board, pending, config, create, onCreated };
+    latest.current = { board, pending, config, create, onCreated, saved };
   });
   const timer = useRef<number | undefined>(undefined);
   const creating = useRef(false);
@@ -48,8 +54,8 @@ export function useBoardConfig(
   const flush = useCallback(() => {
     window.clearTimeout(timer.current);
     timer.current = undefined;
-    const { board: b, pending: p, create: make, onCreated: done } = latest.current;
-    if (!p) return;
+    const { board: b, pending: p, create: make, onCreated: done, saved: save } = latest.current;
+    if (!p || !save) return;
     if (b) {
       if (p === sent.current) return; // already on its way
       sent.current = p;
@@ -110,10 +116,10 @@ export function useBoardConfig(
   // that stays alive, so the last request to arrive carries this config either way.
   useEffect(() => {
     const saveNow = () => {
-      const { board: b, pending: p } = latest.current;
-      if (b && p && p !== beaconed.current) {
+      const { board: b, pending: p, saved: save } = latest.current;
+      if (save && b && p && p !== beaconed.current) {
         beaconed.current = p;
-        void request('PATCH', `/boards/${b.id}`, { config: p }, { keepalive: true }).catch(() => undefined);
+        void spaceApi(sid).patch(`/boards/${b.id}`, { config: p }, { keepalive: true }).catch(() => undefined);
       }
       flush();
     };
@@ -126,7 +132,7 @@ export function useBoardConfig(
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', saveNow);
     };
-  }, [flush]);
+  }, [flush, sid]);
 
-  return { config, setConfig, dirty: pending !== null };
+  return { config, setConfig, dirty: pending !== null, saved };
 }

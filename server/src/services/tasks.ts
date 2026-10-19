@@ -1,7 +1,9 @@
 // Task reading: hydration to TaskDTO, lookups by id/ref, and the SQL implementation of
 // TaskFilter / TaskSort. buildTaskWhere and taskOrderBy are exact SQL equivalents of
-// matchesTaskFilter / compareTasks in shared/src/filter.ts (cross-checked by
-// server/test/services.filter.test.ts on randomized data) — keep them in lockstep.
+// matchesTaskFilter / compareTasks in shared/src/filter.ts (cross-checked on randomized data by
+// server/test/contract/services.filter.contract.ts, on both adapters) — keep them in lockstep. The SQL
+// reads as few rows as it can (a Durable Object bills each, design §11.2, Appendix D 42); the cost test is
+// server/test-workers/cost.test.ts.
 
 import { LIMITS } from '@shared/constants';
 import { resolveDuePreset, type ISODate, type WeekStart } from '@shared/dates';
@@ -12,23 +14,54 @@ import type { Db, SqlValue } from '../db';
 import { notFound } from '../http/errors';
 import { compareTagNames, toTagRef } from './mappers';
 import type { TaskRow } from './rows';
-import { getSettings } from './settings';
-import { CLOSED_CATEGORIES_SQL, inJson, jsonList, serverToday } from './sql';
+import { byJsonIds, CLOSED_CATEGORIES_SQL, jsonList, serverToday } from './sql';
 
 /**
- * FROM clause every task query uses. buildTaskWhere / taskOrderBy reference its aliases:
- * t = tasks, p = the task's project, s = its status, e = its epic (NULL when none).
+ * FROM clause every task query uses: `t` = tasks, and nothing else. buildTaskWhere and taskOrderBy reach the
+ * project, status and epic of a task through subqueries over those small tables instead of joins, because a
+ * Durable Object bills every row a statement reads, and a join reads its row once per task (design §11.2):
+ * an uncorrelated `IN (SELECT …)` reads its table once per statement, a correlated subquery one row per task
+ * it is evaluated for.
  */
-export const TASK_FROM = `tasks t
-  JOIN projects p ON p.id = t.project_id
-  JOIN statuses s ON s.id = t.status_id
-  LEFT JOIN epics e ON e.id = t.epic_id`;
+export const TASK_FROM = 'tasks t';
 
-/** SQL expression for a task's ref ('KEY-42') within TASK_FROM. */
-export const TASK_REF_SQL = "p.key || '-' || t.number";
+/** SQL expression for a task's ref ('KEY-42') within TASK_FROM (a correlated read of its project's key). */
+export const TASK_REF_SQL = "(SELECT key FROM projects WHERE id = t.project_id) || '-' || t.number";
 
-/** SQL condition: the task's status category is closed (completed/cancelled). */
-export const TASK_CLOSED_SQL = `s.category IN ${CLOSED_CATEGORIES_SQL}`;
+/**
+ * The ref folded like the *_fold columns: project keys are ASCII (projectKeySchema), so SQLite's
+ * ASCII-only lower() is exact here.
+ */
+export const TASK_REF_FOLD_SQL = `lower(${TASK_REF_SQL})`;
+
+/**
+ * The columns a task list selects: the row alone. It holds the task's tag ids (migration 2), comment count
+ * and logged minutes (migration 3), so a list reads no task_tags, comment or work-log row: a correlated count
+ * read one billed row per comment and per work log of every task listed (Appendix D 46).
+ */
+export const TASK_COLUMNS = 't.*';
+
+/**
+ * SQL condition: every token of the JSON array bound to `param` occurs in `haystack` (folded text). One
+ * parameter for any number of tokens (design §3.4), so a long query never exceeds a statement's limit.
+ */
+export function allTokensSql(haystack: string, param: string): string {
+  return `NOT EXISTS (SELECT 1 FROM json_each(${param}) tk WHERE instr(${haystack}, tk.value) = 0)`;
+}
+
+/** SQL expression: how many tokens of the JSON array bound to `param` occur in `haystack` (ranking). */
+export function tokenHitsSql(haystack: string, param: string): string {
+  return `(SELECT COUNT(*) FROM json_each(${param}) tk WHERE instr(${haystack}, tk.value) > 0)`;
+}
+
+/**
+ * SQL condition: the task's status category is open (not completed/cancelled), over `status` (t.status_id,
+ * or +t.status_id, which keeps the planner off its index). Not `NOT t.status_id IN (closed ones)`: a Durable
+ * Object bills a NOT IN about one row per task it checks, an IN nothing. Every task has a status (a foreign
+ * key).
+ */
+export const taskOpenSql = (status = 't.status_id') =>
+  `${status} IN (SELECT id FROM statuses WHERE category NOT IN ${CLOSED_CATEGORIES_SQL})`;
 
 export const DEFAULT_TASK_SORT: TaskSort = { field: 'manual', dir: 'asc' };
 
@@ -36,16 +69,21 @@ export const DEFAULT_TASK_SORT: TaskSort = { field: 'manual', dir: 'asc' };
 // Hydration
 // ---------------------------------------------------------------------------
 
+/** The tag ids of a task row (tasks.tag_ids, a JSON array). */
+export function tagIdsOf(row: Pick<TaskRow, 'tag_ids'>): number[] {
+  return JSON.parse(row.tag_ids) as number[];
+}
+
 /**
- * Rows -> TaskDTOs, preserving input order. Batched: a fixed number of queries for any
- * number of rows (project keys, epic milestones, tags, comment counts, work-log sums).
+ * Rows -> TaskDTOs, preserving input order. Batched: three queries at most for any number of rows (project
+ * keys, epic milestones, tag names), each reading its rows by id. The tags come from the rows' tag_ids and
+ * the counts from the rows themselves, so no task_tags, comment or work-log row is read.
  */
 export function hydrateTasks(db: Db, rows: readonly TaskRow[]): TaskDTO[] {
   if (rows.length === 0) return [];
-  const taskIds = jsonList(rows.map((r) => r.id));
   const keys = new Map(
     db
-      .all<{ id: number; key: string }>(`SELECT id, key FROM projects WHERE ${inJson('id', 'ids')}`, {
+      .all<{ id: number; key: string }>(`SELECT p.id, p.key FROM ${byJsonIds('projects', 'p', 'ids')}`, {
         ids: jsonList(rows.map((r) => r.project_id)),
       })
       .map((p) => [p.id, p.key]),
@@ -56,69 +94,58 @@ export function hydrateTasks(db: Db, rows: readonly TaskRow[]): TaskDTO[] {
       ? []
       : db
           .all<{ id: number; milestone_id: number | null }>(
-            `SELECT id, milestone_id FROM epics WHERE ${inJson('id', 'ids')}`,
+            `SELECT e.id, e.milestone_id FROM ${byJsonIds('epics', 'e', 'ids')}`,
             { ids: jsonList(epicIds) },
           )
           .map((e) => [e.id, e.milestone_id]),
   );
-  const tags = new Map<number, TagRef[]>();
-  for (const r of db.all<{ task_id: number; id: number; name: string; color: string }>(
-    `SELECT tt.task_id, g.id, g.name, g.color
-       FROM task_tags tt JOIN tags g ON g.id = tt.tag_id
-      WHERE ${inJson('tt.task_id', 'ids')}`,
-    { ids: taskIds },
-  )) {
-    const list = tags.get(r.task_id);
-    if (list) list.push(toTagRef(r));
-    else tags.set(r.task_id, [toTagRef(r)]);
-  }
-  for (const list of tags.values()) list.sort(compareTagNames);
-  const comments = new Map(
-    db
-      .all<{ task_id: number; n: number }>(
-        `SELECT task_id, COUNT(*) AS n FROM comments WHERE ${inJson('task_id', 'ids')} GROUP BY task_id`,
-        { ids: taskIds },
-      )
-      .map((c) => [c.task_id, c.n]),
+  const tagIds = new Map(rows.map((r) => [r.id, tagIdsOf(r)]));
+  const allTagIds = [...tagIds.values()].flat();
+  const tagsById = new Map(
+    allTagIds.length === 0
+      ? []
+      : db
+          .all<{ id: number; name: string; color: string }>(`SELECT g.id, g.name, g.color FROM ${byJsonIds('tags', 'g', 'ids')}`, {
+              ids: jsonList(allTagIds),
+            })
+          .map((g) => [g.id, toTagRef(g)]),
   );
-  const minutes = new Map(
-    db
-      .all<{ task_id: number; n: number }>(
-        `SELECT task_id, COALESCE(SUM(minutes), 0) AS n FROM work_logs WHERE ${inJson('task_id', 'ids')} GROUP BY task_id`,
-        { ids: taskIds },
-      )
-      .map((w) => [w.task_id, w.n]),
-  );
-
-  return rows.map((r) => ({
-    id: r.id,
-    projectId: r.project_id,
-    number: r.number,
-    ref: `${keys.get(r.project_id) ?? '?'}-${r.number}`,
-    epicId: r.epic_id,
-    milestoneId: r.epic_id === null ? null : (milestones.get(r.epic_id) ?? null),
-    statusId: r.status_id,
-    priority: r.priority,
-    title: r.title,
-    description: r.description,
-    startDate: r.start_date,
-    dueDate: r.due_date,
-    estimate: r.estimate,
-    rank: r.rank,
-    completedAt: r.completed_at,
-    archivedAt: r.archived_at,
-    createdBy: r.created_by,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    tags: tags.get(r.id) ?? [],
-    commentCount: comments.get(r.id) ?? 0,
-    worklogMinutes: minutes.get(r.id) ?? 0,
-  }));
+  return rows.map((r) => {
+    const tags = tagIds
+      .get(r.id)!
+      .map((id) => tagsById.get(id))
+      .filter((g): g is TagRef => g !== undefined)
+      .sort(compareTagNames);
+    return {
+      id: r.id,
+      projectId: r.project_id,
+      number: r.number,
+      ref: `${keys.get(r.project_id) ?? '?'}-${r.number}`,
+      epicId: r.epic_id,
+      milestoneId: r.epic_id === null ? null : (milestones.get(r.epic_id) ?? null),
+      statusId: r.status_id,
+      priority: r.priority,
+      title: r.title,
+      description: r.description,
+      startDate: r.start_date,
+      dueDate: r.due_date,
+      estimate: r.estimate,
+      rank: r.rank,
+      completedAt: r.completed_at,
+      archivedAt: r.archived_at,
+      createdBy: r.created_by,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      tags,
+      commentCount: r.comment_count,
+      worklogMinutes: r.worklog_minutes,
+    };
+  });
 }
 
 /** One task as DTO, or 404. */
 export function getTaskDTO(db: Db, id: number): TaskDTO {
-  const row = db.get<TaskRow>('SELECT * FROM tasks WHERE id = :id', { id });
+  const row = db.get<TaskRow>(`SELECT ${TASK_COLUMNS} FROM ${TASK_FROM} WHERE t.id = :id`, { id });
   if (!row) throw notFound('Task');
   return hydrateTasks(db, [row])[0]!;
 }
@@ -127,7 +154,7 @@ export function getTaskDTO(db: Db, id: number): TaskDTO {
 export function getTaskDTOs(db: Db, ids: readonly number[]): TaskDTO[] {
   if (ids.length === 0) return [];
   const rows = new Map(
-    db.all<TaskRow>(`SELECT * FROM tasks WHERE ${inJson('id', 'ids')}`, { ids: jsonList(ids) }).map((r) => [r.id, r]),
+    db.all<TaskRow>(`SELECT ${TASK_COLUMNS} FROM ${byJsonIds('tasks', 't', 'ids')}`, { ids: jsonList(ids) }).map((r) => [r.id, r]),
   );
   const ordered = [...new Set(ids)].map((id) => rows.get(id)).filter((r): r is TaskRow => r !== undefined);
   return hydrateTasks(db, ordered);
@@ -155,7 +182,7 @@ export function findTaskByRef(db: Db, ref: string): TaskDTO | null {
   const parsed = parseTaskRef(ref);
   if (!parsed) return null;
   const row = db.get<TaskRow>(
-    'SELECT t.* FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.key = :key AND t.number = :number',
+    `SELECT ${TASK_COLUMNS} FROM ${TASK_FROM} JOIN projects p ON p.id = t.project_id WHERE p.key = :key AND t.number = :number`,
     parsed,
   );
   return row ? hydrateTasks(db, [row])[0]! : null;
@@ -183,8 +210,14 @@ function nonEmpty<T>(arr: readonly T[] | undefined): arr is readonly T[] {
 }
 
 /**
- * WHERE condition (over TASK_FROM aliases) equivalent to matchesTaskFilter(task, filter, ctx).
- * Parameter names are f0, f1, … — don't reuse them in the surrounding statement.
+ * WHERE condition (over TASK_FROM's `t` alone) equivalent to matchesTaskFilter(task, filter, ctx).
+ * Parameter names are f0, f1, … — don't reuse them in the surrounding statement. A unary `+` keeps the
+ * planner from an index for the conditions that hold for most tasks (not archived, of a project that is
+ * not archived): without statistics it takes any indexed equality for selective, and then reads every
+ * task through that index and once more to sort them. Likewise for the status conditions when a list of
+ * projects is given, which the (project_id, number) index serves: through the status index the query read
+ * the tasks of every project in those statuses (a project's page of open tasks: 2,419 rows instead of
+ * 1,739, a board that hides closed tasks 2,019 instead of 1,339; Appendix D 47).
  */
 export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFragment {
   const clauses: string[] = [];
@@ -205,18 +238,30 @@ export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFr
     if (ids.includes(null)) parts.push(`${column} IS NULL`);
     return anyOf(parts);
   };
+  /** The task's epic is in one of the milestones (null: a task without an epic, or whose epic has none). */
+  const inMilestones = (ids: readonly (number | null)[]): string => {
+    const values = ids.filter((id): id is number => id !== null);
+    const parts: string[] = [];
+    if (values.length > 0) parts.push(`t.epic_id IN (SELECT id FROM epics WHERE ${inList('milestone_id', values)})`);
+    if (ids.includes(null)) parts.push('(t.epic_id IS NULL OR t.epic_id IN (SELECT id FROM epics WHERE milestone_id IS NULL))');
+    return anyOf(parts);
+  };
   const tagged = (ids?: readonly number[]): string =>
     `EXISTS (SELECT 1 FROM task_tags tt WHERE tt.task_id = t.id${ids ? ` AND ${inList('tt.tag_id', ids)}` : ''})`;
+  const status = nonEmpty(filter.projectIds) ? '+t.status_id' : 't.status_id';
+  const open = taskOpenSql(status);
 
   if (nonEmpty(filter.ids)) clauses.push(inList('t.id', filter.ids));
   // Projects: an explicit list wins; otherwise archived projects are hidden unless requested.
   if (nonEmpty(filter.projectIds)) clauses.push(inList('t.project_id', filter.projectIds));
-  else if (!filter.includeArchivedProjects) clauses.push("p.status <> 'archived'");
+  else if (!filter.includeArchivedProjects) clauses.push("+t.project_id IN (SELECT id FROM projects WHERE status <> 'archived')");
 
-  if (nonEmpty(filter.milestoneIds)) clauses.push(nullableIn('e.milestone_id', filter.milestoneIds));
+  if (nonEmpty(filter.milestoneIds)) clauses.push(inMilestones(filter.milestoneIds));
   if (nonEmpty(filter.epicIds)) clauses.push(nullableIn('t.epic_id', filter.epicIds));
-  if (nonEmpty(filter.statusIds)) clauses.push(inList('t.status_id', filter.statusIds));
-  if (nonEmpty(filter.statusCategories)) clauses.push(inList('s.category', filter.statusCategories));
+  if (nonEmpty(filter.statusIds)) clauses.push(inList(status, filter.statusIds));
+  if (nonEmpty(filter.statusCategories)) {
+    clauses.push(`${status} IN (SELECT id FROM statuses WHERE ${inList('category', filter.statusCategories)})`);
+  }
   if (nonEmpty(filter.priorities)) clauses.push(inList('t.priority', filter.priorities));
 
   if (nonEmpty(filter.tagIds)) {
@@ -245,7 +290,7 @@ export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFr
       const r = resolveDuePreset(preset, ctx.today, ctx.weekStartsOn);
       switch (r.kind) {
         case 'overdue':
-          return `(t.due_date < ${param(r.before)} AND NOT ${TASK_CLOSED_SQL})`;
+          return `(t.due_date < ${param(r.before)} AND ${open})`;
         case 'none':
           return 't.due_date IS NULL';
         case 'any':
@@ -266,25 +311,31 @@ export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFr
     if (filter.dueTo) clauses.push(`t.due_date <= ${param(filter.dueTo)}`);
   }
 
-  // Same haystack as the JS reference (`${title}\n${description}\n${ref}`), lower-cased by
-  // lyren_lower (= JS toLowerCase) so Unicode folding is identical.
-  for (const token of searchTokens(filter.search)) {
+  // The JS reference's haystack is `${title}\n${description}\n${ref}`, lower-cased; here the stored folds
+  // (= JS toLowerCase, which folding a concatenation piecewise leaves unchanged), so Unicode folding is
+  // identical. The tokens are already folded by searchTokens and hold no whitespace, so a token occurs in
+  // the haystack exactly when it occurs in one of its three parts: they are checked one by one, the ref
+  // (a read of the project's key) only for a token that is in neither the title nor the description.
+  const tokens = searchTokens(filter.search);
+  if (tokens.length > 0) {
     clauses.push(
-      `instr(lyren_lower(t.title || char(10) || t.description || char(10) || ${TASK_REF_SQL}), ${param(token)}) > 0`,
+      `NOT EXISTS (SELECT 1 FROM json_each(${param(JSON.stringify(tokens))}) tk
+        WHERE instr(t.title_fold, tk.value) = 0 AND instr(t.description_fold, tk.value) = 0
+          AND instr(${TASK_REF_FOLD_SQL}, tk.value) = 0)`,
     );
   }
 
   const archived = filter.archived ?? 'exclude';
-  if (archived === 'exclude') clauses.push('t.archived_at IS NULL');
+  if (archived === 'exclude') clauses.push('+t.archived_at IS NULL');
   else if (archived === 'only') clauses.push('t.archived_at IS NOT NULL');
 
   const days = filter.closedWithinDays;
   if (days !== undefined && days !== null) {
     if (days === 0) {
-      clauses.push(`NOT ${TASK_CLOSED_SQL}`);
+      clauses.push(open);
     } else {
       const cutoffIso = new Date(ctx.nowMs - days * 86_400_000).toISOString();
-      clauses.push(`(NOT ${TASK_CLOSED_SQL} OR t.completed_at IS NULL OR t.completed_at >= ${param(cutoffIso)})`);
+      clauses.push(`(${open} OR t.completed_at IS NULL OR t.completed_at >= ${param(cutoffIso)})`);
     }
   }
 
@@ -292,9 +343,10 @@ export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFr
 }
 
 /**
- * ORDER BY list (over TASK_FROM aliases) equivalent to compareTasks(a, b, sort):
+ * ORDER BY list (over TASK_FROM's `t`) equivalent to compareTasks(a, b, sort):
  * nulls (and priority 0) always last, ties broken by rank then id (both ascending);
- * 'manual' is rank, id in the requested direction.
+ * 'manual' is rank, id in the requested direction. 'status' looks the position up in the JSON object
+ * bound to :statusPositions (statusPositions(db)), which reads no row per task.
  *
  * Known edge: titles compare as UTF-8 bytes in SQLite but UTF-16 code units in JS, which
  * only differ for supplementary-plane characters vs U+E000–U+FFFF at the same position.
@@ -323,8 +375,14 @@ export function taskOrderBy(sort: TaskSort): string {
     case 'number':
       return `t.project_id ${dir}, t.number ${dir}, ${tie}`;
     case 'status':
-      return `s.position ${dir}, ${tie}`;
+      return `json_extract(:statusPositions, '$."' || t.status_id || '"') ${dir}, ${tie}`;
   }
+}
+
+/** The :statusPositions parameter of taskOrderBy: every status's position by id, as one JSON object. */
+export function statusPositions(db: Db): string {
+  const rows = db.all<{ id: number; position: number }>('SELECT id, position FROM statuses');
+  return JSON.stringify(Object.fromEntries(rows.map((r) => [r.id, r.position])));
 }
 
 export interface TaskQueryOptions {
@@ -332,29 +390,52 @@ export interface TaskQueryOptions {
   nowMs?: number;
   /** Fallback when input.today is absent (default: server UTC date). */
   today?: ISODate;
-  /** Fallback when input.weekStartsOn is absent (default: settings.weekStartsOn). */
+  /** Fallback when input.weekStartsOn is absent (default 1, Monday). */
   weekStartsOn?: WeekStart;
 }
 
 /**
+ * The most tasks a request asks for as a page of a longer list: the task list asks for 200 at a time (and 200
+ * more on "Show more"), boards and the dashboard's sections for LIMITS.queryLimitMax, which they expect to get
+ * all of. queryTasks reads a page and a whole list differently (below).
+ */
+export const TASK_PAGE_MAX = 500;
+
+/**
  * POST /api/tasks/query. Filter default {} (which still hides archived tasks and archived
  * projects), sort default manual/asc, limit default LIMITS.queryLimitDefault, offset 0.
+ *
+ * Rows read (a Durable Object bills each, design §11.2, Appendix D 47): a whole list reads its tasks in order
+ * (once each, and once more each in a sorter for an order no index gives), and a COUNT(*) of every match only
+ * when it was cut short. A page reads the ids of every match in order instead, which gives the total, and then
+ * its own rows by id (two rows a task): the sorter has read every match anyway, so the count costs nothing
+ * more, where the COUNT(*) read every match again (a page of one 660-task project: 1,739 rows instead of
+ * 3,493). Where an index gives the order and the planner stops after the page (the manual order of the whole
+ * space), the page costs about one row more per task shown than reading it directly would.
  */
 export function queryTasks(db: Db, input: TaskQueryInput = {}, opts: TaskQueryOptions = {}): TaskQueryResult {
   const ctx: TaskWhereContext = {
     today: input.today ?? opts.today ?? serverToday(),
-    weekStartsOn: input.weekStartsOn ?? opts.weekStartsOn ?? getSettings(db).weekStartsOn,
+    weekStartsOn: input.weekStartsOn ?? opts.weekStartsOn ?? 1,
     nowMs: opts.nowMs ?? Date.now(),
   };
   const where = buildTaskWhere(input.filter ?? {}, ctx);
   const limit = Math.min(Math.max(1, input.limit ?? LIMITS.queryLimitDefault), LIMITS.queryLimitMax);
   const offset = Math.max(0, input.offset ?? 0);
+  const sort = input.sort ?? DEFAULT_TASK_SORT;
+  const params = { ...where.params, ...(sort.field === 'status' ? { statusPositions: statusPositions(db) } : {}) };
+  if (limit <= TASK_PAGE_MAX) {
+    const ids = db
+      .all<{ id: number }>(`SELECT t.id FROM ${TASK_FROM} WHERE ${where.sql} ORDER BY ${taskOrderBy(sort)}`, params)
+      .map((r) => r.id);
+    return { tasks: getTaskDTOs(db, ids.slice(offset, offset + limit)), total: ids.length };
+  }
   const rows = db.all<TaskRow>(
-    `SELECT t.* FROM ${TASK_FROM}
+    `SELECT ${TASK_COLUMNS} FROM ${TASK_FROM}
       WHERE ${where.sql}
-      ORDER BY ${taskOrderBy(input.sort ?? DEFAULT_TASK_SORT)}
+      ORDER BY ${taskOrderBy(sort)}
       LIMIT :limit OFFSET :offset`,
-    { ...where.params, limit, offset },
+    { ...params, limit, offset },
   );
   const complete = rows.length < limit && (offset === 0 || rows.length > 0);
   const total = complete

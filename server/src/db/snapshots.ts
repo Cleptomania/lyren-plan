@@ -1,9 +1,12 @@
 // Automatic safety snapshots and their retention.
 //
-// Two kinds are written automatically (both with Db.backupTo, i.e. VACUUM INTO):
-//   pre-import-<stamp>[-<n>].db           before every JSON import (routes/data.ts), in DATA_DIR/backups
-//   lyren-v<N>-before-upgrade-<stamp>.db  before a schema migration (db/schema.ts), in backups/ next
-//                                         to the database file
+// Four kinds are written automatically (all with NodeDb.backupTo, i.e. VACUUM INTO; design §9.5), in
+// backups/ next to the directory file:
+//   pre-import-<stamp>[-<n>].db                  before a replace import of a space (routes/data.ts,
+//                                                runtime/node/spaceStore.ts), in backups/spaces/<id>/
+//   lyren-v<N>-before-upgrade-<stamp>.db         before a migration of a 1.x database (db/schema.ts)
+//   directory-v<N>-before-upgrade-<stamp>.db     before a migration of the directory (runtime/node/stack.ts)
+//   space-v<N>-before-upgrade-<stamp>.db         before a migration of a space, in backups/spaces/<id>/
 // <stamp> is the UTC write time from snapshotStamp(), e.g. 2026-10-14T06-56-26-123Z.
 //
 // After writing one, the caller runs pruneSnapshots() to keep the newest `keep` of that kind
@@ -19,10 +22,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-/** Snapshots of each kind kept by default (SNAPSHOT_KEEP). */
-export const DEFAULT_SNAPSHOT_KEEP = 10;
+/** Snapshots of each kind kept by default (SNAPSHOT_KEEP; defined with the other defaults in core/config.ts). */
+export { DEFAULT_SNAPSHOT_KEEP } from '../core/config';
 
-export type SnapshotKind = 'pre-import' | 'before-upgrade';
+export type SnapshotKind = 'pre-import' | 'before-upgrade' | 'directory-before-upgrade' | 'space-before-upgrade';
 
 /** snapshotStamp() output: an ISO-8601 UTC timestamp with ':' and '.' replaced by '-'. */
 const STAMP = String.raw`(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)`;
@@ -31,6 +34,8 @@ const PATTERNS: Record<SnapshotKind, RegExp> = {
   // The optional -<n> suffix keeps names unique when two imports land in the same millisecond.
   'pre-import': new RegExp(String.raw`^pre-import-${STAMP}(?:-([1-9]\d{0,5}))?\.db$`),
   'before-upgrade': new RegExp(String.raw`^lyren-v([1-9]\d{0,5})-before-upgrade-${STAMP}\.db$`),
+  'directory-before-upgrade': new RegExp(String.raw`^directory-v([1-9]\d{0,5})-before-upgrade-${STAMP}\.db$`),
+  'space-before-upgrade': new RegExp(String.raw`^space-v([1-9]\d{0,5})-before-upgrade-${STAMP}\.db$`),
 };
 
 /** File-name-safe UTC timestamp; sorts chronologically as a string. */
@@ -119,9 +124,28 @@ export function pruneSnapshots(dir: string, kind: SnapshotKind, keep: number, ju
 /** One log line about a prune (nothing when nothing was deleted). */
 export function logPrune(kind: SnapshotKind, dir: string, keep: number, { removed }: PruneResult): void {
   if (removed.length === 0) return;
-  const what = kind === 'pre-import' ? 'pre-import' : 'pre-upgrade';
+  const what = kind === 'pre-import' ? 'pre-import' : kind === 'before-upgrade' ? 'pre-upgrade' : `${kind.split('-')[0]} pre-upgrade`;
   console.log(
     `[lyren] Deleted ${removed.length} old ${what} snapshot${removed.length === 1 ? '' : 's'} from ${dir} ` +
       `(keeping the newest ${keep}; set SNAPSHOT_KEEP to change, 0 keeps all)`,
   );
+}
+
+/**
+ * Write a snapshot of `db` (VACUUM INTO, NodeDb.backupTo) into `dir` and prune its kind there: a
+ * pre-import snapshot as pre-import-<stamp>[-<n>].db (the -<n> when two land in one millisecond), an
+ * upgrade snapshot as <prefix>-v<from>-before-upgrade-<stamp>.db. Returns the file name.
+ */
+export function writeSnapshot(
+  db: { backupTo(file: string): void },
+  dir: string,
+  kind: Exclude<SnapshotKind, 'before-upgrade'>,
+  o: { keep: number; from?: number },
+): string {
+  const stamp = snapshotStamp();
+  let name = kind === 'pre-import' ? `pre-import-${stamp}.db` : `${kind.split('-')[0]}-v${o.from ?? 0}-before-upgrade-${stamp}.db`;
+  if (kind === 'pre-import') for (let n = 2; fs.existsSync(path.join(dir, name)); n++) name = `pre-import-${stamp}-${n}.db`;
+  db.backupTo(path.join(dir, name));
+  logPrune(kind, dir, o.keep, pruneSnapshots(dir, kind, o.keep, name));
+  return name;
 }

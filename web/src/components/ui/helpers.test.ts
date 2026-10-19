@@ -29,8 +29,10 @@ describe('initials', () => {
   it('takes first and last word initials', () => {
     expect(initials('Ada Lovelace')).toBe('AL');
     expect(initials('Grace Brewster Hopper')).toBe('GH');
-    expect(initials('darren')).toBe('DA');
-    expect(initials('darren.eberly')).toBe('DE');
+    expect(initials('grace')).toBe('GR');
+    expect(initials('grace.hopper')).toBe('GH');
+    expect(initials('Unknown (imported)')).toBe('UI');
+    expect(initials('“Old” Pat')).toBe('OP');
     expect(initials('  ')).toBe('?');
   });
 });

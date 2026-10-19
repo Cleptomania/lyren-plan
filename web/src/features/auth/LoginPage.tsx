@@ -1,97 +1,56 @@
-// Sign-in screen. On success the auth-status query refetches and PublicOnly redirects to
-// the page the user came from (or the home page).
+// Sign-in screen. On success the auth-status query refetches and PublicOnly redirects to the page the
+// user came from (or the home page). The ways back in follow the instance (linkPages.ts signInHelp):
+// "Forgot password?" when it mails reset links, else "ask an administrator"; the reset-password command
+// on a server one runs oneself; "Create an account" when sign-up is open (design §12.7). After a password
+// reset the address arrives filled in (`state.identifier`), and after a reset with a passkey the focus is on
+// "Sign in with a passkey" (`state.passkey`).
 
-import { useRef, useState, type FormEvent } from 'react';
-import { loginInput, type LoginInput } from '@shared/schemas';
-import { useAuthStatus, useLogin } from '../../api/auth';
-import { ApiError } from '../../api/client';
-import { Button } from '../../components/ui/Button';
-import { Field } from '../../components/ui/Field';
-import { apiFieldErrors, zodFieldErrors, type FieldErrors } from '../../components/ui/formErrors';
-import { Input, PasswordInput } from '../../components/ui/Input';
+import { Link, useLocation } from 'react-router';
+import { useAuthStatus } from '../../api/auth';
 import { useDocumentTitle } from '../../lib/hooks';
-import { authErrorMessage } from './authErrors';
-import { AuthLayout, FormAlert } from './AuthLayout';
+import { AUTH_LINK, AuthLayout, FormNotice } from './AuthLayout';
+import { ASK_ADMIN_TEXT, signInHelp } from './linkPages';
 import { PasswordResetHint } from './PasswordResetHint';
+import { SignInForm } from './SignInForm';
+
+/** What another page hands the sign-in page (the password reset). */
+export interface LoginState {
+  identifier?: string;
+  notice?: string;
+  /** The reset set up a passkey: the focus starts on "Sign in with a passkey", not the password. */
+  passkey?: boolean;
+}
 
 export default function LoginPage() {
   useDocumentTitle('Sign in');
   const { data: status } = useAuthStatus();
-  const login = useLogin();
-  const [values, setValues] = useState<LoginInput>({ username: '', password: '' });
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const [formError, setFormError] = useState<string | null>(null);
-  const usernameRef = useRef<HTMLInputElement>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
-
-  const set = (key: keyof LoginInput) => (e: { target: { value: string } }) => {
-    setValues((v) => ({ ...v, [key]: e.target.value }));
-    if (errors[key]) setErrors((x) => ({ ...x, [key]: undefined }));
-  };
-
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (login.isPending) return;
-    setFormError(null);
-    const parsed = loginInput.safeParse(values);
-    if (!parsed.success) {
-      const fe = zodFieldErrors(parsed.error);
-      setErrors(fe);
-      (fe.username ? usernameRef : passwordRef).current?.focus();
-      return;
-    }
-    setErrors({});
-    login.mutate(parsed.data, {
-      onError: (err) => {
-        setErrors(apiFieldErrors(err));
-        setFormError(authErrorMessage(err));
-        if (err instanceof ApiError && err.status === 401) {
-          passwordRef.current?.focus();
-          passwordRef.current?.select();
-        }
-      },
-    });
-  };
+  const state = (useLocation().state ?? {}) as LoginState;
+  const help = status ? signInHelp(status) : null;
 
   return (
     <AuthLayout
       title="Sign in to Lyren Plan"
       footer={
         <>
-          <PasswordResetHint desktop={status?.desktop} />
+          {help?.askAdmin && <p className="mb-1">{ASK_ADMIN_TEXT}</p>}
+          {help?.command && <PasswordResetHint desktop={status?.desktop} operator={help.forgot || help.askAdmin} />}
           {status?.version && <p className="mt-1">Lyren Plan {status.version}</p>}
         </>
       }
     >
-      <form method="post" noValidate onSubmit={onSubmit} className="flex flex-col gap-4">
-        <Field label="Username" error={errors.username}>
-          <Input
-            ref={usernameRef}
-            name="username"
-            value={values.username}
-            onChange={set('username')}
-            autoComplete="username"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            autoFocus
-            maxLength={64}
-          />
-        </Field>
-        <Field label="Password" error={errors.password}>
-          <PasswordInput
-            ref={passwordRef}
-            name="password"
-            value={values.password}
-            onChange={set('password')}
-            autoComplete="current-password"
-          />
-        </Field>
-        {formError && <FormAlert>{formError}</FormAlert>}
-        <Button type="submit" variant="primary" fullWidth loading={login.isPending} className="mt-1">
-          Sign in
-        </Button>
-      </form>
+      <div className="flex flex-col gap-4">
+        {typeof state.notice === 'string' && <FormNotice>{state.notice}</FormNotice>}
+        <SignInForm identifier={typeof state.identifier === 'string' ? state.identifier : ''} forgot={help?.forgot} focusPasskey={state.passkey === true}>
+          {help?.signup && (
+            <p className="text-center text-sm text-fg-muted">
+              New here?{' '}
+              <Link to="/signup" className={AUTH_LINK}>
+                Create an account
+              </Link>
+            </p>
+          )}
+        </SignInForm>
+      </div>
     </AuthLayout>
   );
 }

@@ -1,5 +1,5 @@
 // Entry point of the Node build and Docker:
-//   node dist/server.mjs [serve|backup <file>|reset-password <username>|help]
+//   node dist/server.mjs [serve|backup <file>|reset-password <email-or-username>|help]
 // The commands live in cli.ts; the single-file desktop app has its own entry (sea.ts).
 
 import path from 'node:path';

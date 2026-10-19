@@ -1,0 +1,25 @@
+# Copy this file to .dev.vars for `npm run dev:cf` (.dev.vars is git-ignored). On Cloudflare, set secrets
+# with `npx wrangler secret put <NAME>` or in the dashboard. Every other setting: docs/cloudflare.md.
+
+# First-run setup code: whoever knows it can create the first (admin) account. Choose a long random
+# value. Leave it empty to have a code generated and written to the Worker's logs.
+SETUP_TOKEN=
+
+# Break-glass recovery when no administrator can sign in (docs/cloudflare.md, "Locked out"). Leave it
+# unset. Set it only while you need it, then delete it again.
+# RECOVERY_TOKEN=
+
+# Local development only: write whole emails, sign-in links included, to the console.
+# MAIL_LOG_BODIES=1
+
+# Mail (docs/cloudflare.md, "Mail"). Without MAIL_TRANSPORT nothing is sent: each message is a line in
+# the logs. On Cloudflare, set SMTP_PASS and RESEND_API_KEY with `npx wrangler secret put <NAME>`.
+# MAIL_TRANSPORT=smtp
+# MAIL_FROM=plan@example.com
+# PUBLIC_URL=https://plan.example.com
+# SMTP_HOST=smtp.example.com
+# SMTP_SECURITY=tls
+# SMTP_USER=plan@example.com
+# SMTP_PASS=
+# RESEND_API_KEY=
+# A mail catcher on this machine (wrangler dev): SMTP_HOST=localhost, SMTP_PORT=1025, SMTP_SECURITY=none.

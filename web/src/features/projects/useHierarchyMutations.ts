@@ -17,6 +17,7 @@ import {
   useUpdateProject,
 } from '../../api/projects';
 import { qk } from '../../api/keys';
+import { useSpaceId } from '../../app/space';
 import { toast } from '../../components/ui';
 
 type EntityKind = 'projects' | 'milestones' | 'epics';
@@ -33,16 +34,17 @@ function stripUndefined<T extends object>(patch: T): Partial<T> {
 /** Apply `patch` to one entity in the bootstrap cache. Returns a rollback that restores the previous entity. */
 async function patchCachedEntity<K extends EntityKind>(
   qc: QueryClient,
+  spaceId: string,
   kind: K,
   id: number,
   patch: Partial<EntityOf[K]>,
 ): Promise<() => void> {
-  await qc.cancelQueries({ queryKey: qk.bootstrap, exact: true });
-  const list = qc.getQueryData<BootstrapDTO>(qk.bootstrap)?.[kind] as EntityOf[K][] | undefined;
+  await qc.cancelQueries({ queryKey: qk.bootstrap(spaceId), exact: true });
+  const list = qc.getQueryData<BootstrapDTO>(qk.bootstrap(spaceId))?.[kind] as EntityOf[K][] | undefined;
   const previous = list?.find((e) => e.id === id);
   if (!previous) return () => {};
   const replace = (value: EntityOf[K]) =>
-    qc.setQueryData<BootstrapDTO>(qk.bootstrap, (old) =>
+    qc.setQueryData<BootstrapDTO>(qk.bootstrap(spaceId), (old) =>
       old ? { ...old, [kind]: (old[kind] as EntityOf[K][]).map((e) => (e.id === id ? value : e)) } : old,
     );
   replace({ ...previous, ...patch });
@@ -50,14 +52,14 @@ async function patchCachedEntity<K extends EntityKind>(
 }
 
 /** Write new positions (index in `ids`) into the bootstrap cache. Returns a rollback. */
-async function reorderCached(qc: QueryClient, kind: EntityKind, ids: readonly number[]): Promise<() => void> {
-  await qc.cancelQueries({ queryKey: qk.bootstrap, exact: true });
-  const list = qc.getQueryData<BootstrapDTO>(qk.bootstrap)?.[kind];
+async function reorderCached(qc: QueryClient, spaceId: string, kind: EntityKind, ids: readonly number[]): Promise<() => void> {
+  await qc.cancelQueries({ queryKey: qk.bootstrap(spaceId), exact: true });
+  const list = qc.getQueryData<BootstrapDTO>(qk.bootstrap(spaceId))?.[kind];
   if (!list) return () => {};
   const before = new Map(list.map((e) => [e.id, e.position]));
   const index = new Map(ids.map((id, i) => [id, i]));
   const write = (position: (id: number, current: number) => number) =>
-    qc.setQueryData<BootstrapDTO>(qk.bootstrap, (old) =>
+    qc.setQueryData<BootstrapDTO>(qk.bootstrap(spaceId), (old) =>
       old
         ? { ...old, [kind]: (old[kind] as Array<{ id: number; position: number }>).map((e) => ({ ...e, position: position(e.id, e.position) })) }
         : old,
@@ -79,43 +81,47 @@ async function run<T>(rollback: () => void, request: Promise<T>, success?: strin
 }
 
 export function useSaveProject() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const { mutateAsync } = useUpdateProject();
   return useCallback(
     async (project: Pick<ProjectDTO, 'id'>, patch: ProjectUpdateInput, success?: string) => {
-      const rollback = await patchCachedEntity(qc, 'projects', project.id, stripUndefined(patch));
+      const rollback = await patchCachedEntity(qc, sid, 'projects', project.id, stripUndefined(patch));
       return run(rollback, mutateAsync({ id: project.id, ...patch }), success);
     },
-    [qc, mutateAsync],
+    [qc, sid, mutateAsync],
   );
 }
 
 export function useSaveMilestone() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const { mutateAsync } = useUpdateMilestone();
   return useCallback(
     async (milestone: Pick<MilestoneDTO, 'id'>, patch: MilestoneUpdateInput, success?: string) => {
-      const rollback = await patchCachedEntity(qc, 'milestones', milestone.id, stripUndefined(patch));
+      const rollback = await patchCachedEntity(qc, sid, 'milestones', milestone.id, stripUndefined(patch));
       return run(rollback, mutateAsync({ id: milestone.id, ...patch }), success);
     },
-    [qc, mutateAsync],
+    [qc, sid, mutateAsync],
   );
 }
 
 export function useSaveEpic() {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const { mutateAsync } = useUpdateEpic();
   return useCallback(
     async (epic: Pick<EpicDTO, 'id'>, patch: EpicUpdateInput, success?: string) => {
-      const rollback = await patchCachedEntity(qc, 'epics', epic.id, stripUndefined(patch));
+      const rollback = await patchCachedEntity(qc, sid, 'epics', epic.id, stripUndefined(patch));
       return run(rollback, mutateAsync({ id: epic.id, ...patch }), success);
     },
-    [qc, mutateAsync],
+    [qc, sid, mutateAsync],
   );
 }
 
 /** Reorder a whole scope (all projects, or all milestones / epics of one project). */
 export function useReorder(kind: EntityKind) {
+  const sid = useSpaceId();
   const qc = useQueryClient();
   const projects = useReorderProjects();
   const milestones = useReorderMilestones();
@@ -123,9 +129,9 @@ export function useReorder(kind: EntityKind) {
   const mutateAsync = { projects, milestones, epics }[kind].mutateAsync;
   return useCallback(
     async (ids: number[]) => {
-      const rollback = await reorderCached(qc, kind, ids);
+      const rollback = await reorderCached(qc, sid, kind, ids);
       return run(rollback, mutateAsync(ids));
     },
-    [qc, kind, mutateAsync],
+    [qc, sid, kind, mutateAsync],
   );
 }

@@ -1,8 +1,8 @@
 // Plain-language explanations for the start-up problems a self-hoster can fix themselves
 // (a data directory that can't be created or written, port in use, bad environment value, missing
 // web client), printed instead of a stack trace or a silent 404. Functions that return lines (only
-// fileInTheWay looks at the disk) so they can be tested; cli.ts and desktop/ print them (and exit
-// for the fatal ones).
+// fileInTheWay, nearestFolder and inContainer look at the disk) so they can be tested; cli.ts, desktop/
+// and the space store print them (and exit for the fatal ones).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,6 +16,8 @@ export type Audience = 'server' | 'desktop';
 interface ErrorLike {
   message?: unknown;
   code?: unknown;
+  /** node:fs: the call that failed ('mkdir' while the data folder is created). */
+  syscall?: unknown;
   /** node:sqlite: the SQLite result code (14 = SQLITE_CANTOPEN, 8 = SQLITE_READONLY). */
   errcode?: unknown;
 }
@@ -70,15 +72,46 @@ export function fileInTheWay(dir: string): string | null {
   }
 }
 
-/** Lines explaining why the database at `dbPath` could not be opened. */
+/**
+ * The nearest existing folder at or above `dir`: `dir` itself when it exists, else the folder above it in
+ * which it would be created (the one a permission error is about).
+ */
+export function nearestFolder(dir: string): string {
+  for (let p = path.resolve(dir); ; p = path.dirname(p)) {
+    try {
+      if (fs.statSync(p).isDirectory()) return p;
+    } catch {
+      // not there (yet)
+    }
+    if (path.dirname(p) === p) return p;
+  }
+}
+
+/**
+ * Whether this process runs in a container, where the data folder is usually a bind mount of the host's:
+ * the Docker image sets LYREN_CONTAINER=1, and Docker also leaves /.dockerenv (Podman /run/.containerenv).
+ */
+export function inContainer(env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = fs.existsSync): boolean {
+  return env.LYREN_CONTAINER === '1' || exists('/.dockerenv') || exists('/run/.containerenv');
+}
+
+/** A path as typed in a POSIX shell: single-quoted when it holds anything but safe characters. */
+const shellPath = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", `'\\''`)}'`);
+
+/**
+ * Lines explaining why the database at `dbPath` could not be opened. `container` (inContainer) decides
+ * whether the Docker advice is shown: under systemd, the release tarball or a shell it would mislead.
+ */
 export function dbOpenFailureMessage(
   dbPath: string,
   err: unknown,
   uid: number | undefined,
   audience: Audience = 'server',
   platform: NodeJS.Platform = process.platform,
+  container: boolean = inContainer(),
 ): string[] {
   const lines = [`Could not open the database ${dbPath}: ${messageOf(err)}`];
+  const e = (err ?? {}) as ErrorLike;
   const dir = path.dirname(dbPath);
   const desktop = audience === 'desktop';
   const chooseFolder = 'Choose another data folder with --data-dir <folder> (or the DATA_DIR environment variable).';
@@ -112,10 +145,21 @@ export function dbOpenFailureMessage(
         lines.push(
           `The directory ${dir} and the files in it must be writable by the user running the server` +
             (uid === undefined ? '.' : ` (uid ${uid}).`),
-          'Docker: the container runs as uid 1000, so give a bind-mounted data directory to it, e.g.',
-          '  sudo chown -R 1000:1000 ./data',
-          'Without Docker: set DATA_DIR to a directory this user owns.',
         );
+        // The data folder's mkdir: it does not exist yet, and a chown of it would fail.
+        const notCreated = (e.code === 'EACCES' || e.code === 'EPERM') && e.syscall === 'mkdir';
+        if (container) {
+          lines.push('Docker: the container runs as uid 1000, so give a bind-mounted data directory to it, e.g.', '  sudo chown -R 1000:1000 ./data');
+        } else if (uid !== undefined && notCreated) {
+          lines.push(
+            `It does not exist yet, and this user cannot create it in ${nearestFolder(dir)}.`,
+            `Create it for that user (e.g. sudo install -d -o ${uid} -m 700 ${shellPath(dir)}), or set DATA_DIR to a directory it owns.`,
+          );
+        } else if (uid !== undefined) {
+          lines.push(`Give them to that user (e.g. sudo chown -R ${uid} ${shellPath(dir)}), or set DATA_DIR to a directory it owns.`);
+        } else {
+          lines.push('Set DATA_DIR to a directory this user can write to.');
+        }
       }
       break;
     case null:

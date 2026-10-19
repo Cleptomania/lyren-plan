@@ -9,12 +9,15 @@ import { formatMinutes } from '@shared/duration';
 import type { ISODate } from '@shared/dates';
 import { useLookups } from '../../api/bootstrap';
 import { useWorklogReport } from '../../api/timeline';
+import { useSpaceId } from '../../app/space';
 import { TaskRef, useSharedToday } from '../../components/domain';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { Card, ColorDot, DateInput, EmptyState, ErrorState, Field, Select, Skeleton, SkeletonList } from '../../components/ui';
 import { dayHeading, pluralize } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/hooks';
+import { personText } from '../../lib/people';
+import { ImportedNote } from './ImportedNote';
 import { taskPageUrl, useOpenTask } from '../../lib/taskLinks';
 import { ProjectFilter, useProjectParam } from './ProjectFilter';
 import {
@@ -215,7 +218,8 @@ function WorklogReportView({ items, totalMinutes, range, today, showProjects, fe
 }
 
 function ReportEntry({ item }: { item: ReportItem }) {
-  const { projectById, user } = useLookups();
+  const sid = useSpaceId();
+  const { projectById, user, personById } = useLookups();
   const openTask = useOpenTask();
   const project = projectById.get(item.task.projectId);
   const duration = item.minutes !== null && item.minutes > 0 ? formatMinutes(item.minutes) : null;
@@ -231,7 +235,7 @@ function ReportEntry({ item }: { item: ReportItem }) {
       <ColorDot color={project?.color ?? 'var(--fg-subtle)'} square label={project?.name} className="mt-[7px]" />
       <div className="min-w-0 flex-1">
         <a
-          href={taskPageUrl(item.task)}
+          href={taskPageUrl(sid, item.task)}
           onClick={onClick}
           className="-my-1 flex min-h-8 min-w-0 items-baseline gap-2 rounded py-1 text-sm text-fg hover:underline pointer-coarse:min-h-10"
         >
@@ -239,7 +243,8 @@ function ReportEntry({ item }: { item: ReportItem }) {
           <span className="min-w-0 truncate">{item.task.title}</span>
         </a>
         {item.note && <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap break-words text-[13px] text-fg-muted">{item.note}</p>}
-        {item.author && item.author.id !== user.id && <p className="mt-0.5 text-xs text-fg-subtle">{item.author.displayName}</p>}
+        {item.author?.id !== user.id && <p className="mt-0.5 text-xs text-fg-subtle">{personText(item.author, personById)}</p>}
+        <ImportedNote entry={item} className="mt-0.5" />
       </div>
       <span className={clsx('shrink-0 pt-0.5 text-sm tabular-nums', duration ? 'font-semibold text-fg' : 'text-fg-subtle')}>
         {duration ?? '—'}

@@ -139,9 +139,9 @@ describe('GET /api/search', () => {
     expect(titles(found)).toEqual(['Widget in archived project', 'Widget on hold', 'Widget done', 'Widget archived']);
     expect(found.at(-1)!.archivedAt).not.toBeNull();
     // Relevance still wins: a title hit on an archived task beats a description-only live hit,
-    // and an exact ref finds the archived task first.
-    db.run("UPDATE tasks SET description = 'gadget' WHERE title = 'Widget on hold'");
-    db.run("UPDATE tasks SET title = 'Gadget archived' WHERE id = :id", { id: archived });
+    // and an exact ref finds the archived task first. (Direct writes keep the fold columns in step, §3.4.)
+    db.run("UPDATE tasks SET description = 'gadget', description_fold = 'gadget' WHERE title = 'Widget on hold'");
+    db.run("UPDATE tasks SET title = 'Gadget archived', title_fold = 'gadget archived' WHERE id = :id", { id: archived });
     expect(titles((await search('gadget')).tasks)).toEqual(['Gadget archived', 'Widget on hold']);
     const ref = found.at(-1)!.ref;
     expect(titles((await search(ref)).tasks)[0]).toBe('Gadget archived');
@@ -150,7 +150,7 @@ describe('GET /api/search', () => {
   it('finds projects by name, key and description with stats', async () => {
     const { db, search } = await setup();
     const me = insertProject(db, 'ME', { name: 'Personal' });
-    db.run("UPDATE projects SET description = 'Some web errands' WHERE id = :id", { id: me });
+    db.run("UPDATE projects SET description = 'Some web errands', description_fold = 'some web errands' WHERE id = :id", { id: me });
     const web = insertProject(db, 'WEB', { name: 'Website relaunch' });
     insertProject(db, 'OLD', { name: 'Old web', status: 'archived' });
     insertProject(db, 'XYZ', { name: 'Unrelated' });
@@ -176,12 +176,12 @@ describe('GET /api/search', () => {
     const m1 = insertMilestone(db, p, { name: 'MVP launch', status: 'completed' });
     const m2 = insertMilestone(db, p, { name: 'Launch party', status: 'active' });
     const m3 = insertMilestone(db, p, { name: 'Beta' });
-    db.run("UPDATE milestones SET description = 'launch prep' WHERE id = :id", { id: m3 });
+    db.run("UPDATE milestones SET description = 'launch prep', description_fold = 'launch prep' WHERE id = :id", { id: m3 });
     insertMilestone(db, p, { name: 'Unrelated' });
     const e1 = insertEpic(db, p, { name: 'Design system', status: 'done', milestoneId: m1 });
     insertEpic(db, p, { name: 'System upgrade' });
     const e3 = insertEpic(db, p, { name: 'Perf' });
-    db.run("UPDATE epics SET description = 'system wide' WHERE id = :id", { id: e3 });
+    db.run("UPDATE epics SET description = 'system wide', description_fold = 'system wide' WHERE id = :id", { id: e3 });
     insertTask(db, { projectId: p, epicId: e1, estimate: 3 });
 
     const result = await search('launch');
