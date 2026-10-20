@@ -1567,7 +1567,8 @@ accepted too, so an open tab from before the upgrade can still sign in):
    identifier.toLowerCase()`. `trusted` = the request carries a valid device token of that account (below).
 2. Checks, all reads, cheapest first, each → 429 with `Retry-After`: `lg` (instance-wide failures) when not
    `trusted`; `li:<ip>`; `ln:<net>`; `lid:<account key>` when not `trusted`; `lda:<id>` (daily failures of
-   the account from untrusted clients) when not `trusted`. Trusted clients are still counted on `li` and `ln`
+   the account from untrusted clients, or `lda:i:<identifier>` for one that matches no account, so that the block
+   tells nothing about whether the address has one, §13.6) when not `trusted`. Trusted clients are still counted on `li` and `ln`
    (§5.9).
 3. Record one failure on every applicable key **before** the slow check (as today: parallel requests cannot
    slip past), then wait for a slot in the hash queue (§5.5).
@@ -1988,7 +1989,7 @@ for clients that rotate addresses inside one allocation. An empty client IP (loc
 | `li:<ip>` | failed password logins, failed setup codes and recovery tokens, failed `currentPassword` and re-auth passwords | 10 / 15 min | block, buffered → 429 |
 | `ln:<net>` | the same, per coarse network | 50 / 15 min | block, buffered → 429 |
 | `lid:<account key>` (§5.8.2: `a:<userId>` or `i:<identifier>`) | failed password logins for one account, or for one identifier that matches no account | 20 / 15 min free | progressive, buffered: each further failure sets `blocked_until = now + min(250 ms · 2^(n−20), 10 s)`; attempts before it → 429 `Retry-After` (today's GuessThrottle, now per account, answering 429 instead of sleeping). Browsers with the account's device token are exempt |
-| `lda:<userId>` | failed password logins for one account from browsers without its device token | 100 / 24 h | block, buffered: those browsers only; a deferred `login_attempts` notice at the first block of the day |
+| `lda:<userId>`, `lda:i:<identifier>` | failed password logins for one account from browsers without its device token, or for an identifier that matches none (the same block either way, §13.6) | 100 / 24 h | block, buffered: those browsers only; a deferred `login_attempts` notice at the first block of the day |
 | `pk:<ip>`, `pk:<net>` | failed passkey assertions | 30 / 150 per 15 min | block, buffered |
 | `co:<ip>`, `co:<net>` | WebAuthn options requests | 60 / 300 per 15 min | block, buffered |
 | `mh:<email_key>` | signup, forgot, verification and email-change requests for that address | 3 / 1 h | block, exact → 429 (applies the same to addresses with and without accounts) |

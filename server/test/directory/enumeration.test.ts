@@ -16,6 +16,7 @@ import { migrate } from '../../src/core/migrate';
 import { APP_VERSION } from '../../src/core/version';
 import { mailBudgets } from '../../src/directory/mailer';
 import { PasswordHasher } from '../../src/directory/passwords';
+import { POLICIES } from '../../src/directory/throttle';
 import { DIRECTORY_MIGRATIONS } from '../../src/directory/schema';
 import { createLogTransport } from '../../src/mail/log';
 import { NodeDb } from '../../src/runtime/node/nodeDb';
@@ -201,6 +202,28 @@ describe('the same answer and the same work for addresses with and without an ac
     const strip = (s: string) => s.replace(/member0|nobody0/g, 'X').replace(/#t=[A-Za-z0-9_-]{43}/g, '#t=T');
     expect([strip(a!.subject), strip(a!.text), strip(a!.html)]).toEqual([strip(b!.subject), strip(b!.text), strip(b!.html)]);
   });
+});
+
+describe('the daily lock of failed sign-ins (lda, §5.8.2)', () => {
+  it('locks a missing address after as many failures as an existing one, so the lock tells nothing', async () => {
+    const h = createDirectoryHarness();
+    await h.setup();
+    /** One past the daily limit of failures from browsers without a device token, each from a new network. */
+    const statuses = async (identifier: string) => {
+      const seen: number[] = [];
+      for (let i = 0; i <= POLICIES.lda.limit; i++) {
+        // Past the 15-minute windows every 19 attempts, so lg, li, ln and lid never refuse: only lda can.
+        if (i % 19 === 0) h.clock.advance(16 * 60_000);
+        const res = await h.client({ ip: `10.0.${i}.7` }).post('/api/auth/login', { identifier, password: 'wrong password' });
+        seen.push(res.status);
+      }
+      return seen;
+    };
+    const existing = await statuses('owner@example.com');
+    const missing = await statuses('nobody@example.com');
+    expect(existing.at(-1)).toBe(429);
+    expect(missing).toEqual(existing);
+  }, 60_000);
 });
 
 describe('what the requests leave behind', () => {

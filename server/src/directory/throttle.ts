@@ -53,7 +53,7 @@ export const POLICIES = {
   ln: { name: 'ln', limit: 50, windowMs: 15 * MINUTE, mode: 'block', storage: 'buffered' },
   /** Failed password logins of one account (a:<id>) or of an identifier that matches none (i:<identifier>). */
   lid: { name: 'lid', limit: 20, windowMs: 15 * MINUTE, mode: 'progressive', storage: 'buffered' },
-  /** Failed password logins of one account from browsers without its device token, per day. */
+  /** Failed password logins of one account (<id>) from browsers without its device token, or of an identifier that matches none (i:<identifier>), per day. */
   lda: { name: 'lda', limit: 100, windowMs: DAY, mode: 'block', storage: 'buffered' },
   /** Sign-up, forgot-password, verification and email-change requests for one address (email_key), per hour. */
   mh: { name: 'mh', limit: 3, windowMs: HOUR, mode: 'block', storage: 'exact' },
