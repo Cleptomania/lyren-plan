@@ -598,7 +598,7 @@ are in docs/design/multi-user-and-cloudflare.md §7.2.
 | POST `/api/admin/users/:userId/reset-link` | – | `ResetLinkDTO` (instance admins, re-auth; not for an admin's account, nor one demoted lately) |
 | GET/POST `/api/admin/invitations` · DELETE `…/:invitationId` | – / `AdminInvitationInput` (re-auth) · – (re-auth) | `InvitationDTO[]` / 201 `InvitationCreatedDTO` · `{ ok }` (instance invitations: an account, no space) |
 | GET `/api/admin/spaces?q&cursor&limit` · DELETE `/api/admin/spaces/:spaceId` · POST `…/restore` | `AdminSpacesQuery` · – (re-auth) · – (re-auth) | `Page<AdminSpaceDTO>` (every space, no content; `bytes` on Node only) · `{ ok, purgeAfter }` · `AdminSpaceDTO` (409 once the grace period is over, or when no member is left) |
-| GET/HEAD `/api/admin/backup` | – | a backup set (`application/x-tar`; instance admins, re-auth) |
+| GET/HEAD `/api/admin/backup` | – | a backup set (`application/x-tar`; instance admins, re-auth; 403 for an image, a frame or another site by Fetch Metadata, design §13.4) |
 | POST `/api/admin/mail/test` | – | `MailTestDTO` `{ ok, messageId? }`: a test message to the admin's own address, sent at once (instance admins); 502 `unavailable` with the transport's error (never a secret), 409 for an account without an email address |
 | *Space endpoints, from here down to `/api/search`: served as `/api/s/:spaceId/<path after /api>` (design §7.3); the role each needs is the gate's (design §6.4), and reads answer `If-None-Match` with 304. Without a known session 401, for a space the account cannot open 404, whether or not the space exists. Unprefixed (`/api/bootstrap`, …) they are no space's: the directory answers them as any path it does not know, 401 signed out and 404 signed in, with the message "Lyren Plan has been updated. Reload the page to continue." for the tab of an old client* | | |
 | GET `/api/bootstrap?today=` | – | `BootstrapDTO` (`user`: `UserRef`; `space`: `SpaceInfoDTO` with the viewer's role; `people`: the mirror; `settings`: `SpaceSettings`) |
@@ -631,7 +631,7 @@ are in docs/design/multi-user-and-cloudflare.md §7.2.
 | GET/POST `/api/tags` · PATCH/DELETE `/api/tags/:id` · POST `/api/tags/:id/merge` | `TagCreateInput` · `TagUpdateInput` · `TagMergeInput` | `TagDTO` |
 | GET/POST `/api/statuses` · PATCH `/api/statuses/:id` · DELETE `/api/statuses/:id?reassignTo=` · POST `/api/statuses/reorder` | `StatusCreateInput` · `StatusUpdateInput` · `ReorderInput` | `StatusDTO` |
 | GET/PATCH `/api/settings` | `SpaceSettingsUpdateInput` | `SpaceSettings` (§5.9) |
-| GET/HEAD `/api/data/export` | – | the space's archive v2 (`application/gzip`, attachment `lyren-space-<slug>-YYYY-MM-DD.json.gz`, `SpaceArchiveDTO`; owner, re-auth; §5.10) |
+| GET/HEAD `/api/data/export` | – | the space's archive v2 (`application/gzip`, attachment `lyren-space-<slug>-YYYY-MM-DD.json.gz`, `SpaceArchiveDTO`; owner, re-auth; 403 for an image, a frame or another site by Fetch Metadata, design §13.4; §5.10) |
 | POST `/api/data/import/analyze?mode=new\|replace` | multipart `file` | `ImportAnalysisDTO` (§5.10; owner, re-auth for `replace`; `new` only while the space is `importing`) |
 | POST `/api/data/import/commit?mode=new\|replace` | multipart `file`, `mapping` (JSON `ImportMappingInput`) | `ImportResultDTO` (§5.10; 409 `quota_exceeded` over `IMPORT_MAX_ROW_WRITES`, 429 past the day's import budget) |
 | POST `/api/people/:personId/reassign` · POST `/api/people/me/disown` | `PeopleReassignInput` · – | `PeopleReassignedDTO` (admins and owners) · `PeopleDisownedDTO` (anyone) |

@@ -35,6 +35,7 @@ import type {
   ResetLinkDTO,
 } from '@shared/types';
 import { conflict, forbidden, HttpError, notFound, rateLimited, unavailable } from '../../http/errors';
+import { assertDownloadRequest } from '../../http/fetchMetadata';
 import { readBody, readId, readJson, readQuery } from '../../http/validate';
 import {
   adminDeleteSpace,
@@ -269,6 +270,7 @@ export function adminRoutes(ctx: DirectoryContext) {
     if (!backup) throw new HttpError(404, 'not_found', 'Not found');
     const admin = requireInstanceAdmin(c);
     requireRecent(c, ctx);
+    assertDownloadRequest(c.req);
     const day = new Date(ctx.now()).toISOString().slice(0, 10);
     c.header('Content-Type', 'application/x-tar');
     // Headers only: a set is written for a GET alone (a body-less response would never close its stream).

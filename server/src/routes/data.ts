@@ -28,6 +28,7 @@ import type { ImportReservation } from '../core/ports';
 import { APP_VERSION } from '../core/version';
 import type { AppEnv, Deps } from '../env';
 import { quotaExceeded, rateLimited, unavailable } from '../http/errors';
+import { assertDownloadRequest } from '../http/fetchMetadata';
 import { nowIso, serverToday } from '../services/sql';
 import { importAnalysis, referencedEmailKeys, referencedUsers, suggestTargets } from '../space/archive/analysis';
 import { planImport, rowsToInsert, storedImport, writeImport } from '../space/archive/commit';
@@ -66,6 +67,7 @@ export function dataRoutes({ db, config, space }: Deps) {
 
 
   r.get('/export', async (c) => {
+    assertDownloadRequest(c.req);
     const identity = currentIdentity(c);
     c.header('Content-Type', 'application/gzip');
     c.header('Content-Disposition', `attachment; filename="${archiveFileName(identity.space.name, serverToday())}"`);
