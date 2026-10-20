@@ -2782,7 +2782,8 @@ their later profile changes and deletions reach this mirror, §3.5) → `ImportR
 **Why the file is uploaded twice:** keeping analyze stateless means no staging storage, no cleanup, and no
 staging rows written on the DO (rows-written budget). Commit re-validates everything anyway.
 
-**Request handling** (`space/archive/read.ts`), inside `deps.space.importGate.run` (Node: one import parse at a
+**Request handling** (`space/archive/read.ts`), inside `deps.space.importGate.run`, which the space gate takes
+before it reads the body (so a refused import buffers no upload) (Node: one import parse at a
 time per process, because a parse can need hundreds of MB; a second analyze or commit anywhere on the server
 meanwhile → 503 `unavailable` "Another import is running. Try again in a minute."; CF: each space is its own
 object):

@@ -526,6 +526,32 @@ describe('the data routes and what the space gives them (read snapshot, import g
     expect(h.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM tasks')!.n).toBe(tasks);
   });
 
+  it('import: refused while another runs before a byte of its body is read, so parallel uploads are not buffered', async () => {
+    const h = createSpaceHarness();
+    let pulls = 0;
+    // highWaterMark 0: the stream produces a chunk only when the server reads one.
+    const upload = () =>
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulls += 1;
+            if (pulls > 4) controller.close();
+            else controller.enqueue(new Uint8Array(1024));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+    const multipart = { 'Content-Type': 'multipart/form-data; boundary=lyren' };
+    h.importGate.busy = true;
+    for (const step of ['analyze', 'commit']) {
+      const res = await h.owner.client.request('POST', `/api/data/import/${step}?mode=replace`, upload(), multipart);
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe('unavailable');
+    }
+    expect(pulls).toBe(0);
+    expect(h.importGate.runs).toBe(0);
+  });
+
   it('Cloudflare has no safety point: safety is null', async () => {
     const h = createSpaceHarness({ runtime: 'cloudflare' });
     h.safety.point = null;

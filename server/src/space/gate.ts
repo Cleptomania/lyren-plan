@@ -294,38 +294,48 @@ export function createGate(deps: Deps, rules: Readonly<Record<string, GateRule>>
       return identity;
     };
 
-    let identity = await judge(c.env.identity, c.env.fromCache);
-    // The body, and steps 3-7 again on the authorization as of its arrival (see the header).
-    let body: Uint8Array | null = null;
-    const stream = c.req.raw.body;
-    if (stream !== null) {
-      body = await bufferBody(c, stream, IMPORT_BODY_ROUTES.has(key) ? config.importBodyLimit : config.bodyLimit);
-      const again = await c.env.recheck();
-      identity = await judge(again.identity, again.fromCache);
-    }
-    c.set('identity', identity);
-    c.set('user', spaceActor(identity));
-
-    // 8. Conditional read. The generation is taken here, after the body and before the route reads
-    // anything: a write that commits meanwhile bumps it only afterwards, so this ETag can only be older
-    // than the data.
-    let etag: string | null = null;
-    if (rule.conditional) {
-      const url = new URL(c.req.url);
-      const method = c.req.method === 'HEAD' ? 'GET' : c.req.method;
-      const text = method === 'POST' && body !== null ? new TextDecoder().decode(body) : '';
-      const nowMs = clock.now();
-      etag = conditionalEtag({ method, path: url.pathname, query: url.searchParams, body: text, nowMs }, space.writeState.gen, identity);
-      // If-None-Match compares weakly (RFC 9110 §13.1.2): the Node gateway's compression sends the tag as W/"…".
-      if (c.req.header('If-None-Match')?.replace(/^W\//, '') === etag) {
-        return c.body(null, 304, { ETag: etag, 'Cache-Control': 'no-store' });
+    /** Everything after the first steps 3-7: the body, steps 3-7 again, 8 and 9. */
+    const proceed = async (first: SpaceIdentity): Promise<Response | void> => {
+      let identity = first;
+      // The body, and steps 3-7 again on the authorization as of its arrival (see the header).
+      let body: Uint8Array | null = null;
+      const stream = c.req.raw.body;
+      if (stream !== null) {
+        body = await bufferBody(c, stream, IMPORT_BODY_ROUTES.has(key) ? config.importBodyLimit : config.bodyLimit);
+        const again = await c.env.recheck();
+        identity = await judge(again.identity, again.fromCache);
       }
-    }
+      c.set('identity', identity);
+      c.set('user', spaceActor(identity));
 
-    // 9. The route; then, after all of its writes, the bump (whatever the response's status).
-    const since = db.meter?.rowsWritten ?? 0;
-    await next();
-    if (rule.write) space.writeState.bump(since);
-    if (etag !== null && c.res.status === 200) c.header('ETag', etag);
+      // 8. Conditional read. The generation is taken here, after the body and before the route reads
+      // anything: a write that commits meanwhile bumps it only afterwards, so this ETag can only be older
+      // than the data.
+      let etag: string | null = null;
+      if (rule.conditional) {
+        const url = new URL(c.req.url);
+        const method = c.req.method === 'HEAD' ? 'GET' : c.req.method;
+        const text = method === 'POST' && body !== null ? new TextDecoder().decode(body) : '';
+        const nowMs = clock.now();
+        etag = conditionalEtag({ method, path: url.pathname, query: url.searchParams, body: text, nowMs }, space.writeState.gen, identity);
+        // If-None-Match compares weakly (RFC 9110 §13.1.2): the Node gateway's compression sends the tag as W/"…".
+        if (c.req.header('If-None-Match')?.replace(/^W\//, '') === etag) {
+          return c.body(null, 304, { ETag: etag, 'Cache-Control': 'no-store' });
+        }
+      }
+
+      // 9. The route; then, after all of its writes, the bump (whatever the response's status).
+      const since = db.meter?.rowsWritten ?? 0;
+      await next();
+      if (rule.write) space.writeState.bump(since);
+      if (etag !== null && c.res.status === 200) c.header('ETag', etag);
+    };
+
+    const judged = await judge(c.env.identity, c.env.fromCache);
+    // An import holds the import gate (§8.4) from here, before a byte of its body is read, until its
+    // response: a second import is refused 503 without buffering its upload, so one account cannot hold
+    // several IMPORT_BODY_LIMIT bodies in memory at once by sending them in parallel.
+    if (IMPORT_BODY_ROUTES.has(key)) return space.importGate.run(() => proceed(judged));
+    return proceed(judged);
   };
 }

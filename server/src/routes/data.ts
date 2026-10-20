@@ -18,8 +18,8 @@
 //            mode=new on a space the import already filled (a directory call that failed after the space's
 //            transaction) reads nothing and writes nothing again: it repeats importCommitted and answers the
 //            stored result (§8.4 step 5, Appendix D 60).
-// Both run inside Deps.space.importGate: one import at a time in the process (Node) or in the space (Cloudflare),
-// else 503.
+// The gate runs both inside Deps.space.importGate, taken before the body is read (space/gate.ts): one import at
+// a time in the process (Node) or in the space (Cloudflare), else 503.
 
 import { Hono } from 'hono';
 import { archiveFileName } from '@shared/archive';
@@ -82,96 +82,92 @@ export function dataRoutes({ db, config, space }: Deps) {
     return c.body(archive.stream(), 200);
   });
 
-  r.post('/import/analyze', (c) =>
-    space.importGate.run(async () => {
-      const user = currentUser(c);
-      const started = await directory.reserveImport({ spaceId: space.id, userId: user.id, step: 'start', rowWrites: 0 });
-      if (!started.ok) throw refusal(started);
-      const { archive } = await readImportRequest(c, config);
-      const candidates = await candidatesFor(archive, user.id);
-      // Estimated as the suggestions would map the users (at most one mirror row each, whatever the mapping).
-      const suggestions = suggestTargets(archive, candidates, user.id);
-      const inserted = rowsToInsert(planImport(archive, { mapping: { mapping: suggestions }, candidates, importerId: user.id }));
-      const deleted = rowsToDelete(db);
-      return c.json<ImportAnalysisDTO>(
-        importAnalysis({
-          archive,
-          mode: c.var.importMode!,
-          candidates,
-          importerId: user.id,
-          estimate: {
-            rowWrites: estimateRowWrites(inserted, deleted),
-            rowWritesWithoutActivity: estimateRowWrites({ ...inserted, activity: 0 }, deleted),
-            limit: perImport,
-            dailyLeft: started.dailyLeft,
-          },
-        }),
-      );
-    }),
-  );
+  r.post('/import/analyze', async (c) => {
+    const user = currentUser(c);
+    const started = await directory.reserveImport({ spaceId: space.id, userId: user.id, step: 'start', rowWrites: 0 });
+    if (!started.ok) throw refusal(started);
+    const { archive } = await readImportRequest(c, config);
+    const candidates = await candidatesFor(archive, user.id);
+    // Estimated as the suggestions would map the users (at most one mirror row each, whatever the mapping).
+    const suggestions = suggestTargets(archive, candidates, user.id);
+    const inserted = rowsToInsert(planImport(archive, { mapping: { mapping: suggestions }, candidates, importerId: user.id }));
+    const deleted = rowsToDelete(db);
+    return c.json<ImportAnalysisDTO>(
+      importAnalysis({
+        archive,
+        mode: c.var.importMode!,
+        candidates,
+        importerId: user.id,
+        estimate: {
+          rowWrites: estimateRowWrites(inserted, deleted),
+          rowWritesWithoutActivity: estimateRowWrites({ ...inserted, activity: 0 }, deleted),
+          limit: perImport,
+          dailyLeft: started.dailyLeft,
+        },
+      }),
+    );
+  });
 
-  r.post('/import/commit', (c) =>
-    space.importGate.run(async () => {
-      const user = currentUser(c);
-      const mode = c.var.importMode!;
-      const commit = async (mappedUserIds: number[]) => {
-        try {
-          await directory.importCommitted({ spaceId: space.id, userId: user.id, mode, mappedUserIds });
-        } catch (err) {
-          console.error(`[lyren] Could not record the import of space ${space.id}:`, err);
-          throw unavailable('The import was saved, but it could not be completed. Send it again to finish.');
-        }
-        // The space is active now: the importer's cached identity (Cloudflare's auth cache) still says importing,
-        // which would refuse their next requests until it ran out. A fresh one replaces it (§10.5).
-        if (mode === 'new') {
-          await c.env.reauthorize().catch((err) => console.error(`[lyren] Could not refresh an identity of space ${space.id}:`, err));
-        }
-      };
-
-      // Filled by an earlier commit whose answer was lost: nothing is written again.
-      const stored = mode === 'new' ? storedImport(db) : null;
-      if (stored) {
-        await commit(stored.mappedUserIds);
-        return c.json<ImportResultDTO>(stored.result);
-      }
-
-      const started = await directory.reserveImport({ spaceId: space.id, userId: user.id, step: 'start', rowWrites: 0 });
-      if (!started.ok) throw refusal(started);
-      const { archive, mapping } = await readImportRequest(c, config);
-      const candidates = await candidatesFor(archive, user.id);
-      const plan = planImport(archive, { mapping: readMapping(mapping), candidates, importerId: user.id });
-      const rowWrites = estimateRowWrites(rowsToInsert(plan), rowsToDelete(db));
-      if (perImport !== null && rowWrites > perImport) {
-        throw quotaExceeded(
-          `This import needs about ${thousands(rowWrites)} row writes; this instance allows ${thousands(perImport)} per import.`,
-        );
-      }
-      const reservation = await directory.reserveImport({ spaceId: space.id, userId: user.id, step: 'rows', rowWrites });
-      if (!reservation.ok) throw refusal(reservation);
-
-      let written;
-      /** The space's meter as the write began (Cloudflare; Node has none). */
-      let meterBefore: number | null = null;
+  r.post('/import/commit', async (c) => {
+    const user = currentUser(c);
+    const mode = c.var.importMode!;
+    const commit = async (mappedUserIds: number[]) => {
       try {
-        // Taken after validation and before anything is replaced; a failure aborts the import (500).
-        const safety = mode === 'replace' ? await space.safety.beforeReplace() : null;
-        meterBefore = db.meter?.rowsWritten ?? null;
-        // Imports have their own budget (§8.9): the space's write budget leaves these rows out (§6.4.2).
-        written = space.writeState.uncounted(() => writeImport(db, plan, { now: nowIso(), safety }));
+        await directory.importCommitted({ spaceId: space.id, userId: user.id, mode, mappedUserIds });
       } catch (err) {
-        if (reservation.reservationId !== null) {
-          // A Durable Object bills the writes of a transaction it rolls back: those rows stay spent.
-          const spentRows = meterBefore === null ? 0 : db.meter!.rowsWritten - meterBefore;
-          await directory.refundImport({ reservationId: reservation.reservationId, spentRows }).catch((e) => {
-            console.error(`[lyren] Could not give back the import reservation of space ${space.id}:`, e);
-          });
-        }
-        throw err;
+        console.error(`[lyren] Could not record the import of space ${space.id}:`, err);
+        throw unavailable('The import was saved, but it could not be completed. Send it again to finish.');
       }
-      await commit(written.mappedUserIds);
-      return c.json<ImportResultDTO>(written.result);
-    }),
-  );
+      // The space is active now: the importer's cached identity (Cloudflare's auth cache) still says importing,
+      // which would refuse their next requests until it ran out. A fresh one replaces it (§10.5).
+      if (mode === 'new') {
+        await c.env.reauthorize().catch((err) => console.error(`[lyren] Could not refresh an identity of space ${space.id}:`, err));
+      }
+    };
+
+    // Filled by an earlier commit whose answer was lost: nothing is written again.
+    const stored = mode === 'new' ? storedImport(db) : null;
+    if (stored) {
+      await commit(stored.mappedUserIds);
+      return c.json<ImportResultDTO>(stored.result);
+    }
+
+    const started = await directory.reserveImport({ spaceId: space.id, userId: user.id, step: 'start', rowWrites: 0 });
+    if (!started.ok) throw refusal(started);
+    const { archive, mapping } = await readImportRequest(c, config);
+    const candidates = await candidatesFor(archive, user.id);
+    const plan = planImport(archive, { mapping: readMapping(mapping), candidates, importerId: user.id });
+    const rowWrites = estimateRowWrites(rowsToInsert(plan), rowsToDelete(db));
+    if (perImport !== null && rowWrites > perImport) {
+      throw quotaExceeded(
+        `This import needs about ${thousands(rowWrites)} row writes; this instance allows ${thousands(perImport)} per import.`,
+      );
+    }
+    const reservation = await directory.reserveImport({ spaceId: space.id, userId: user.id, step: 'rows', rowWrites });
+    if (!reservation.ok) throw refusal(reservation);
+
+    let written;
+    /** The space's meter as the write began (Cloudflare; Node has none). */
+    let meterBefore: number | null = null;
+    try {
+      // Taken after validation and before anything is replaced; a failure aborts the import (500).
+      const safety = mode === 'replace' ? await space.safety.beforeReplace() : null;
+      meterBefore = db.meter?.rowsWritten ?? null;
+      // Imports have their own budget (§8.9): the space's write budget leaves these rows out (§6.4.2).
+      written = space.writeState.uncounted(() => writeImport(db, plan, { now: nowIso(), safety }));
+    } catch (err) {
+      if (reservation.reservationId !== null) {
+        // A Durable Object bills the writes of a transaction it rolls back: those rows stay spent.
+        const spentRows = meterBefore === null ? 0 : db.meter!.rowsWritten - meterBefore;
+        await directory.refundImport({ reservationId: reservation.reservationId, spentRows }).catch((e) => {
+          console.error(`[lyren] Could not give back the import reservation of space ${space.id}:`, e);
+        });
+      }
+      throw err;
+    }
+    await commit(written.mappedUserIds);
+    return c.json<ImportResultDTO>(written.result);
+  });
 
   return r;
 }
