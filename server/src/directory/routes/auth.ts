@@ -197,7 +197,9 @@ export function authRoutes(ctx: DirectoryContext) {
     if (!trusted) keys.push(['lg', POLICIES.lg]);
     keys.push([`li:${ip}`, POLICIES.li], [`ln:${net}`, POLICIES.ln]);
     if (!trusted) keys.push([`lid:${accountKey}`, POLICIES.lid]);
-    if (!trusted && account !== null) keys.push([`lda:${account.id}`, POLICIES.lda]);
+    // lda for an identifier that matches no account too (lda:i:<identifier>, as lid), so that its block answers the
+    // same 429 after the same failures whether or not the address has an account (§13.6).
+    if (!trusted) keys.push([account !== null ? `lda:${account.id}` : `lda:${accountKey}`, POLICIES.lda]);
     assertNotThrottled(ctx, keys);
     // A full hash queue refuses before anything is counted: a sign-in it turns away is no failure.
     passwords.assertCapacity();
