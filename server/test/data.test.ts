@@ -156,6 +156,39 @@ describe('GET /api/data/export', () => {
   });
 });
 
+// §13.4: the two downloads are GETs without the CSRF header, so they are served only to what the browser's Fetch
+// Metadata says is a download from this instance (http/fetchMetadata.ts): not an <img> in a task's Markdown, not a
+// link from another site. A request without the headers (curl, an older browser) is served as before.
+describe('the downloads and Fetch Metadata', () => {
+  const cases: [string, Record<string, string>, number][] = [
+    ['an image on the page', { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'image' }, 403],
+    ['a link from another site', { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Dest': 'document' }, 403],
+    ['a frame', { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'iframe' }, 403],
+    ['a download link here', { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'document' }, 200],
+    ['a typed address', { 'Sec-Fetch-Site': 'none', 'Sec-Fetch-Dest': 'document' }, 200],
+    ['a fetch here', { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'empty' }, 200],
+    ['no Fetch Metadata', {}, 200],
+  ];
+
+  it.each(cases)('the backup, %s → %i (a refused one builds nothing and records nothing)', async (_, headers, status) => {
+    const ctx = await sampleSetup();
+    const backupTo = vi.spyOn(ctx.directoryDb, 'backupTo');
+    const res = await ctx.app.request('/api/admin/backup', { headers: { Cookie: ctx.client.cookie!, ...headers } });
+    expect(res.status).toBe(status);
+    await res.arrayBuffer();
+    const events = ctx.directoryDb.get<{ n: number }>("SELECT COUNT(*) AS n FROM security_events WHERE type = 'admin_backup_downloaded'")!.n;
+    expect(events).toBe(status === 200 ? 1 : 0);
+    if (status !== 200) expect(backupTo).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('the export, %s → %i', async (_, headers, status) => {
+    const { app, client, path: spacePath } = await sampleSetup();
+    const res = await app.request(spacePath('/api/data/export'), { headers: { Cookie: client.cookie!, ...headers } });
+    expect(res.status).toBe(status);
+    if (status === 200) expect(res.headers.get('content-type')).toBe('application/gzip');
+  });
+});
+
 // §7.3, §9.5: GET /api/data/backup is gone; instance admins download a backup set of the directory and
 // every space from GET /api/admin/backup (a tar of SQLite snapshots, runtime/node/backupSet.ts).
 describe('GET /api/admin/backup', () => {
