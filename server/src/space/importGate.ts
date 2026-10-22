@@ -3,6 +3,8 @@
 // Cloudflare one per space object, because a commit reads the space and awaits the directory before it writes,
 // and two commits into one space would both find it as it was (the idempotent retry's check, the rows they
 // delete), write twice and reserve too little (Appendix D 62).
+// The space gate takes it for the import routes before reading their body (space/gate.ts), so a refused import
+// costs no upload buffer: the limit holds for memory, not only for the parse.
 
 import type { Deps } from '../env';
 import { unavailable } from '../http/errors';
