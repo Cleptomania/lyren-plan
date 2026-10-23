@@ -16,3 +16,6 @@ docs
 .wrangler
 .dev.vars
 .dev.vars.*
+wrangler.instance*.jsonc
+wrangler.deploy*.jsonc
+wrangler.local.jsonc

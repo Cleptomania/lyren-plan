@@ -1,0 +1,92 @@
+// This instance's part of the Wrangler configuration (docs/cloudflare.md, "Your instance configuration"):
+// Wrangler's own keys, laid over the project's wrangler.jsonc for each npm run check:cf, npm run deploy:cf and
+// npm run cf -- <Wrangler command>. Copy it, then edit the copy's lines (a key given twice is refused):
+//
+//   cp wrangler.instance.example.jsonc wrangler.instance.jsonc
+//
+// wrangler.instance.jsonc in the checkout is git-ignored and survives git pull; a file anywhere else is named with
+// LYREN_INSTANCE_FILE=<path> or --instance=<path>. The app's own settings (its code, its Durable Objects, the
+// compatibility date) stay in wrangler.jsonc, so an upgrade needs no edit here. Never a secret's value in this file:
+// secrets are the Worker's (npm run cf -- secret put <NAME>). As it is, this file deploys a Worker named lyren-plan
+// on workers.dev with mail off; each commented line is a choice, explained above it.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  // The Worker, at https://<name>.<your-subdomain>.workers.dev. Another name is another Worker, with new, empty
+  // Durable Objects.
+  "name": "lyren-plan",
+  // With several Cloudflare accounts: the one to deploy to (its account ID, under Workers & Pages).
+  // "account_id": "0123456789abcdef0123456789abcdef",
+
+  // A custom domain, a host in a zone of this account (docs/cloudflare.md, "Hostnames, passkeys and workers.dev"):
+  // each deploy attaches the hosts listed, PUBLIC_URL's among them, and turns workers.dev off. The list replaces the
+  // Worker's custom domains; without "routes", the ones added in the dashboard stay as they are.
+  // "routes": [{ "pattern": "plan.example.com", "custom_domain": true }],
+  // workers.dev is on, and off once "routes" is listed. To decide it here (false for a custom domain added in the
+  // dashboard, or a run warns that the deploy turns workers.dev on):
+  // "workers_dev": false,
+
+  // Settings (docs/cloudflare.md, "Configuration"), as text. Each one listed here replaces the Worker's at every
+  // deploy; the others keep the value they have (see "keep_vars"). A deploy checks only the ones listed here, so
+  // list them all, each once: edit these lines rather than add others.
+  "vars": {
+    // The address people open: https://lyren-plan.<your-subdomain>.workers.dev at first (the first deploy prints
+    // it), or the custom domain of "routes"; never localhost, which only wrangler dev uses. Without it, no mail and
+    // no passkeys. Choose the final one before anybody registers a passkey: passkeys belong to its host.
+    // "PUBLIC_URL": "https://plan.example.com",
+    // Passkeys for every host under a parent domain, so that a later move keeps them working:
+    // "WEBAUTHN_RP_ID": "example.com",
+    "INSTANCE_NAME": "Lyren Plan",
+
+    // Mail (docs/cloudflare.md, "Mail"): log sends nothing, each message is a line in the Worker's logs. smtp,
+    // resend and cloudflare also need PUBLIC_URL and MAIL_FROM, the sender's address, here next to MAIL_TRANSPORT.
+    "MAIL_TRANSPORT": "log",
+    // "MAIL_FROM": "plan@example.com",
+    // "MAIL_FROM_NAME": "Lyren Plan",
+    // "MAIL_REPLY_TO": "help@example.com",
+    // smtp: a provider's submission server, tls on port 465 or starttls on 587. Its password is a secret:
+    // npm run cf -- secret put SMTP_PASS.
+    // "SMTP_HOST": "smtp.example.com",
+    // "SMTP_SECURITY": "tls",
+    // "SMTP_USER": "plan@example.com",
+    // resend: a sending domain verified at Resend, and npm run cf -- secret put RESEND_API_KEY. Its free plan sends
+    // 100 messages a day:
+    // "MAIL_DAILY_CAP": "90",
+    // cloudflare: Cloudflare Email Service (Workers Paid), with the sender's domain onboarded for sending. Each
+    // deploy adds the send_email binding EMAIL by itself; no secret. A cap of 96 stays within the 3,000 messages a
+    // month it includes.
+
+    // Quotas ("0" = no limit). The defaults suit the Free plan:
+    // "MAX_SPACES_PER_USER": "5",
+    // "SPACES_CREATED_PER_DAY": "10",
+    // "MAX_MEMBERS_PER_SPACE": "20",
+    // "MAX_OPEN_INVITATIONS_PER_SPACE": "50",
+    // "INVITATIONS_PER_DAY": "20",
+  },
+
+  // SMTP_USER and MAIL_REPLY_TO, the only settings that may be either, kept off the record as secrets of the
+  // Worker (npm run cf -- secret put SMTP_USER) instead of "vars": listed here, a deploy is refused while the
+  // Worker lacks one. SMTP_PASS and RESEND_API_KEY need no line: the app's rules require them. A name is a
+  // variable or a secret, never both. SETUP_TOKEN, the code the first-run setup asks for, stays optional:
+  // npm run cf -- secret put SETUP_TOKEN after the first deploy, or the Worker writes a code to its log
+  // (docs/cloudflare.md, "The setup code").
+  // "secrets": { "required": ["SMTP_USER"] },
+
+  // Variables set in the dashboard, and ones this file no longer lists, stay. false: this file is the whole truth,
+  // and each deploy removes the others.
+  // "keep_vars": false,
+
+  // Workers Paid: CPU time per request, in milliseconds (docs/cloudflare.md, "CPU time and the password hash").
+  // "limits": { "cpu_ms": 100 },
+
+  // MAIL_TRANSPORT cloudflare adds the binding EMAIL by itself. List it only to limit its senders, MAIL_FROM among
+  // them:
+  // "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["plan@example.com"] }],
+
+  // Passed to Wrangler as they are: settings merged onto wrangler.jsonc's "observability", Smart Placement, Workers
+  // Logpush (with a Logpush job of your own) and Tail Workers.
+  // "observability": { "head_sampling_rate": 0.1 },
+  // "placement": { "mode": "smart" },
+  // "logpush": true,
+  // "tail_consumers": [{ "service": "lyren-plan-tail" }],
+}

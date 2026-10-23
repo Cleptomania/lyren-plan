@@ -1,16 +1,18 @@
 # Lyren Plan on Cloudflare
 
-Lyren Plan also runs on Cloudflare, within the Workers **Free** plan to start with, as long as the CPU checks of the runbook (steps [5](#5-measure-the-password-hash-before-any-account-exists) and [11](#11-a-passkey-and-the-heavy-requests)) pass: whether Free's 10 ms of CPU per request applies to Durable Objects is not settled, and several requests take longer than that ([CPU time](#cpu-time-and-the-password-hash)). A Worker routes each request to a Durable Object, one for the accounts (the directory) and one per space, each with its own SQLite database, and Workers Static Assets serve the web app (`wrangler.jsonc`; design: [docs/design/multi-user-and-cloudflare.md](design/multi-user-and-cloudflare.md) §10). Nothing in this repository belongs to one deployment: anyone can deploy their own copy, from their computer, from a fork with the GitHub workflow, or with the Deploy to Cloudflare button. This page is the runbook for all three, the configuration reference, and what the Free plan holds.
+Lyren Plan also runs on Cloudflare, within the Workers **Free** plan to start with, as long as the CPU checks of the runbook (steps [5](#5-measure-the-password-hash-before-any-account-exists) and [11](#11-a-passkey-and-the-heavy-requests)) pass: whether Free's 10 ms of CPU per request applies to Durable Objects is not settled, and several requests take longer than that ([CPU time](#cpu-time-and-the-password-hash)). A Worker routes each request to a Durable Object, one for the accounts (the directory) and one per space, each with its own SQLite database, and Workers Static Assets serve the web app (`wrangler.jsonc`; design: [docs/design/multi-user-and-cloudflare.md](design/multi-user-and-cloudflare.md) §10). Nothing in this repository belongs to one deployment: anyone can deploy their own copy, from their computer, from a fork with the GitHub workflow, or with the Deploy to Cloudflare button. What belongs to one deployment (its Worker's name, custom domain and settings) is in a file of its own, [its instance configuration](#your-instance-configuration). This page is the runbook for all three, the configuration reference, and what the Free plan holds.
 
 The examples use `plan.example.com` for your host name, `example.com` for your domain and `<owner>/<repo>` for your copy of the repository: put your own in their place.
 
 - [How it runs](#how-it-runs)
 - [Before you start](#before-you-start)
+- [Your instance configuration](#your-instance-configuration)
 - [Deploying, step by step](#deploying-step-by-step)
 - [Configuration](#configuration)
 - [Mail](#mail)
 - [Hostnames, passkeys and workers.dev](#hostnames-passkeys-and-workersdev)
 - [Upgrades and rollbacks](#upgrades-and-rollbacks)
+- [Moving to an instance configuration](#moving-to-an-instance-configuration)
 - [Backups, and moving to a server of your own](#backups-and-moving-to-a-server-of-your-own)
 - [Locked out](#locked-out)
 - [The Free plan in plain words](#the-free-plan-in-plain-words)
@@ -41,17 +43,162 @@ What differs from a server of your own (Node):
 You need:
 
 - **A Cloudflare account.** The Free plan is enough to start ([what it holds](#the-free-plan-in-plain-words)).
-- **A host name.** Every Worker gets `lyren-plan.<your-subdomain>.workers.dev` for free (`<your-subdomain>` is your account's, shown in the dashboard under **Workers & Pages**). That is fine for a few people who know each other. A **public instance needs a custom domain** on a zone in the same account, because only a zone can have the rate-limiting rule that stops floods ([Hostnames](#hostnames-passkeys-and-workersdev)). Decide before anybody registers a passkey: passkeys belong to their host name (or the domain in `WEBAUTHN_RP_ID`) and stop working after a move. A new account has no workers.dev subdomain yet: open **Workers & Pages** once and choose it before the first deployment. Wrangler in a terminal (way A) asks for it too, but the workflow (way B) cannot, and stops with "You need to register a workers.dev subdomain before publishing to workers.dev".
+- **A host name.** Every Worker gets `<name>.<your-subdomain>.workers.dev` for free (`<name>` is the Worker's, `lyren-plan` unless you choose another; `<your-subdomain>` is your account's, shown in the dashboard under **Workers & Pages**). That is fine for a few people who know each other. A **public instance needs a custom domain** on a zone in the same account, because only a zone can have the rate-limiting rule that stops floods ([Hostnames](#hostnames-passkeys-and-workersdev)). Decide before anybody registers a passkey: passkeys belong to their host name (or the domain in `WEBAUTHN_RP_ID`) and stop working after a move. A new account has no workers.dev subdomain yet: open **Workers & Pages** once and choose it before the first deployment (one with workers.dev off, at a custom domain listed in `routes`, needs none). Wrangler in a terminal (way A) asks for it too, but the workflow (way B) cannot, and stops with "You need to register a workers.dev subdomain before publishing to workers.dev".
 - **A way to send mail, or none.** Without mail (the default), invitations are links that the inviter passes on, an administrator makes password reset links, and open sign-up is not possible. With mail: an SMTP account at a mail provider (which may not work on the Free plan), Resend with a sending domain, or Cloudflare's Email Service on Workers Paid ([Mail](#mail)). Set up SPF, DKIM and DMARC for the sender's domain at the provider.
 - **For deploying from your computer** (way A below, and to check the build): Node.js 22.13 or newer (24 is what the project uses) with npm, and a checkout of the repository. **For the workflow** (B): a GitHub account and a fork. **For the button** (C): a GitHub or GitLab account.
 
+## Your instance configuration
+
+Everything that belongs to one deployment, and nothing else, is in one file of yours: the instance configuration. It is part of a Wrangler configuration, in Wrangler's own keys (`name`, `routes`, `vars`, …), and it never holds a secret's value, only the names of the secrets the Worker must have. The committed `wrangler.jsonc` keeps everything the app owns (its code, its Durable Objects and their `migrations`, the compatibility date), the same for every instance, so an upgrade reaches yours with nothing to edit in it.
+
+Every Wrangler command for your instance runs through `scripts/cf/wrangler.mjs`: `npm run check:cf`, `npm run deploy:cf` and `npm run cf -- <command>`. It finds the instance configuration and checks it, together with `wrangler.jsonc` and with the app's own configuration parser (`server/src/core/config.ts`: a value the Worker would refuse stops the deploy, instead of making the API answer 503 afterwards). Then it lays it over `wrangler.jsonc` as `wrangler.deploy.<id>.jsonc`, a file of that one run (git-ignored; `<id>` is 8 random hex digits, so that two runs at once, a `tail` and a deploy say, never share one), runs the pinned Wrangler from the checkout's root with `--config=wrangler.deploy.<id>.jsonc`, and removes the file when Wrangler ends. The file's header names the run that wrote it: its process ID, where it runs (the computer's name and, on Linux, its process namespace), and whether it builds. A file that a stopped run on this computer left behind is removed by the next run, which says so (`Removed wrangler.deploy.<id>.jsonc, left by a run that was stopped.`); the file of a run that is still going, or of a run elsewhere (a container or another WSL distribution that shares the checkout), is left alone. A deploy or a check (`deploy` or `versions upload`, dry runs included) builds the web client into `dist/web`, which it empties first, so a second one in the same checkout, while the first is going on, is refused: `another deploy or check may be running in this checkout (wrangler.deploy.<id>.jsonc): wait for it to end, or remove the file if none is`. A `tail` or a `secret` command never waits, and a run without an instance configuration is not part of this. The output names settings, never their values.
+
+**What the check sees.** The app's parser reads the file's variables, and nothing else: not the variables the Worker keeps from the dashboard (`keep_vars`), and not a secret's value. So keep every variable in the file, and at least those that the file's own depend on: `MAIL_FROM` and `PUBLIC_URL` with `MAIL_TRANSPORT`, `PUBLIC_URL` with `WEBAUTHN_RP_ID`. The run says what it checked, `App configuration: the file's variables are valid on Cloudflare (server/src/core/config.ts)`. A refusal that names a setting the file lacks says so, `MAIL_FROM is required with MAIL_TRANSPORT=cloudflare (the check reads only this file's variables: put MAIL_FROM here)`, and a mail setting that only the Worker's own `MAIL_TRANSPORT` would read gets a note: `SMTP_HOST is not read unless the Worker's MAIL_TRANSPORT is smtp: put MAIL_TRANSPORT here so that the check reads it`.
+
+**Where it lives.** The first of these wins, and the first line of the output names it (`Instance configuration: wrangler.instance.jsonc (from the checkout)`):
+
+1. `--instance=<file>` on the command line, for one command: `npm run deploy:cf -- --instance=wrangler.instance.staging.jsonc` deploys another instance from the same checkout.
+2. `LYREN_INSTANCE_FILE=<file>` in the environment, for a file you keep anywhere: set it once in your shell profile (`export LYREN_INSTANCE_FILE="$HOME/lyren/plan.jsonc"`), and a fresh clone finds it too.
+3. `wrangler.instance.jsonc` at the root of the checkout. Start from the example, which has every key, commented, with a word on each:
+
+   ```sh
+   cp wrangler.instance.example.jsonc wrangler.instance.jsonc
+   ```
+
+   Git ignores it (every `wrangler.instance*.jsonc` but the example), so `git pull` never touches it.
+
+A relative path starts in the directory you run npm from. A file that `--instance` or `LYREN_INSTANCE_FILE` names must exist: it is never passed over for the next one. In your own copy of the repository (a fork for the workflow, the Deploy button's copy, a private repository) you commit it: `git add -f wrangler.instance.jsonc` (`.gitignore` lists it), or GitHub's **Add file → Create new file**, which `.gitignore` does not affect. In a fork that you also send pull requests from, commit it to a branch of its own ([step 4B](#4-deploy)), so that your pull requests never carry it. This repository never has that file, so updating your copy from it never conflicts with yours. Committed to a public repository, it is public: `SMTP_USER` and `MAIL_REPLY_TO` can stay out of `vars` as secrets (`secrets`, below), and every other setting is in the file. Wherever it is, keep a copy somewhere else: it is not secret, but it is yours, and nothing can write it again for you.
+
+**What it holds:**
+
+| Key | What it is |
+|---|---|
+| `name` | **Required.** The Worker's name: lower-case letters, digits and dashes, at most 63. Another name is another Worker, with new, empty Durable Objects. In Workers Builds it must be the Worker that the build deploys. |
+| `vars` | The app's settings ([Configuration](#configuration)), as text: `"MAIL_DAILY_CAP": "96"` (a number, `true` or `false` is sent as text too). Each one replaces the Worker's at every deploy; the Worker's others keep their values, unless `keep_vars` is `false`. |
+| `secrets` | `{ "required": ["SMTP_USER"] }`: settings kept as the Worker's secrets instead, among `SMTP_USER`, `SMTP_PASS`, `MAIL_REPLY_TO` and `RESEND_API_KEY`. Wrangler refuses a deploy while the Worker lacks one. Names only. |
+| `routes` | Custom domains, `[{ "pattern": "plan.example.com", "custom_domain": true }]`, in a zone of the account, `PUBLIC_URL`'s host among them. Each deploy attaches them, and the list replaces the Worker's custom domains: list every one it should have. Without `routes`, the ones added in the dashboard stay as they are. |
+| `workers_dev` | `true` or `false`: the `*.workers.dev` address. When absent: off when `routes` is listed, otherwise on, and a run with a custom domain as `PUBLIC_URL` warns: `PUBLIC_URL is a custom domain, but this deploy turns workers.dev on (wrangler.jsonc): add "workers_dev": false once the domain works`. |
+| `keep_vars` | `false`: each deploy removes the variables this file does not list (one set in the dashboard, one taken out of the file). When absent, they stay. |
+| `send_email` | Only to limit the senders of the binding `EMAIL`: `[{ "name": "EMAIL", "allowed_sender_addresses": ["plan@example.com"] }]`, `MAIL_FROM` among them. `MAIL_TRANSPORT=cloudflare` adds the binding by itself. |
+| `limits` | Workers Paid: `{ "cpu_ms": 100 }`, the CPU time a request may use ([CPU time](#cpu-time-and-the-password-hash)), and `subrequests`. |
+| `account_id` | With several accounts: the one to deploy to, which every other command uses too (the same as `CLOUDFLARE_ACCOUNT_ID` when that is set too). |
+| `observability`, `placement`, `logpush`, `tail_consumers` | Passed to Wrangler as they are; `observability` is merged onto `wrangler.jsonc`'s. |
+| `$schema` | `"node_modules/wrangler/config-schema.json"`: an editor completes Wrangler's keys with it. |
+
+**What a run adds by itself:**
+
+- `"workers_dev": false` when `routes` is listed and `workers_dev` is not.
+- The `send_email` binding `EMAIL` of Cloudflare Email Service when `MAIL_TRANSPORT` in `vars` is `cloudflare` and the file lists no `send_email`, so the variable and its binding always come in the same deploy ([step 10](#cloudflare-email-service)).
+- In `secrets.required`, the secrets that the app's own rules require of these settings: `SMTP_PASS` with `MAIL_TRANSPORT=smtp` and `SMTP_USER` (and the other way round), `RESEND_API_KEY` with `resend`. A dry run reads no secrets file, so its `Secrets the Worker must have` can list a secret that the real deploy's `--secrets-file` then uploads itself (and so no longer requires).
+
+**What it refuses, and why** (each refusal says what to do instead):
+
+- `wrangler.jsonc`'s own keys (`main`, `build`, `assets`, `durable_objects`, `migrations`, `compatibility_date`, …): they are the same for every instance.
+- `env` (another instance is another file), `route` (use `routes`), routes that are no custom domains (a path or a zone's route would break `PUBLIC_URL`'s one origin), and bindings Lyren Plan does not read (KV, D1, R2, Queues, …).
+- In `vars`: the secrets `SETUP_TOKEN`, `SMTP_PASS`, `RESEND_API_KEY` and `RECOVERY_TOKEN` (`npm run cf -- secret put <NAME>`), `MAIL_LOG_BODIES` (development only: `.dev.vars`), the Node server's settings, empty values (remove the line; to clear a value set in the dashboard, delete it there), a `LOG_REQUESTS` other than `1`, `true`, `yes`, `on`, `0`, `false`, `no` or `off`, and any other name, with the nearest setting's. A name is a variable or a required secret, never both.
+- `SETUP_TOKEN` in `secrets.required` (it stays optional: without it the Worker makes a setup code), `RECOVERY_TOKEN` there (set by hand only while you need it), and a `send_email` limited to some recipients (invitations go to anyone).
+- A value the app refuses, as the Worker would read it: `Invalid value for PUBLIC_URL: <value> (…)`. Messages name the setting, with `<value>` in place of its value.
+- Values for `wrangler dev` only, which belong in `.dev.vars`: a `PUBLIC_URL` or `SMTP_HOST` on this machine (`localhost`, `127.0.0.1`, `[::1]`: `vars.PUBLIC_URL is a local address, for wrangler dev only: put it in .dev.vars, never in an instance configuration`), and `SMTP_SECURITY` `none` (`vars.SMTP_SECURITY none is for a local relay under wrangler dev only: use tls or starttls`).
+- A name given twice in one object, which JSON would settle without a word by keeping the last: `<file>:<line>:<column>: "vars.MAIL_TRANSPORT" is given twice`. Like a syntax error, it stops every command that runs with an instance configuration, in that file and in `wrangler.jsonc` alike (without one, `check:cf` and the Workers Builds deploy hand `wrangler.jsonc` to Wrangler as it is).
+- An instance configuration or a secrets file saved as UTF-16 or UTF-32: `<file> is saved as UTF-16: save it as UTF-8`. One in UTF-8 with a byte-order mark, as some Windows editors save it, is read.
+- A `wrangler.jsonc` that holds one instance's settings (`routes`, `route`, `vars`, `send_email`, `secrets`, `account_id`, `env`, `limits`, or `workers_dev` other than `true`), as copies edited under earlier instructions do: put back the project's file (`git checkout <upstream>/master -- wrangler.jsonc`) and move those settings here. A different `name` there is fine (the Deploy button writes one): the instance configuration's wins.
+
+`check:cf` and a deploy stop at any problem, after listing them all:
+
+```
+::error::wrangler.instance.jsonc: "migrations" comes from wrangler.jsonc, the same for every instance: remove it here
+::error::wrangler.instance.jsonc: vars.MAIL_TRANSPRT is not a setting of Lyren Plan (did you mean MAIL_TRANSPORT?)
+::error::wrangler.instance.jsonc: vars.SMTP_PASS is a secret, never in a file: npm run cf -- secret put SMTP_PASS
+Nothing was deployed (3 problems).
+```
+
+Other commands (`secret`, `tail`, `rollback`, …) take only the Worker's `name` and `account_id` from the file, with no variables and no domains, so they need only a file that parses and names its Worker, and whose `account_id`, if any, is valid (the same as `CLOUDFLARE_ACCOUNT_ID` when that is set): the two pick the Worker the command acts on. They print the other problems as warnings, and work during an incident too.
+
+**The commands:**
+
+| Command | What it does |
+|---|---|
+| `npm run check:cf` | Checks the instance configuration, then `wrangler deploy --dry-run` with it: bundles the Worker into `dist/worker`, offline. Nothing is uploaded and no account is needed. |
+| `npm run deploy:cf` | Checks it, then `wrangler deploy` with it. `-- --secrets-file=<file>` uploads secrets with the new version (a JSON object of some of `SETUP_TOKEN`, `SMTP_USER`, `SMTP_PASS`, `MAIL_REPLY_TO` and `RESEND_API_KEY`). `npm run deploy` is the same, for the deploy command the Deploy button fills in. |
+| `npm run cf -- --validate` | Checks only, and runs no Wrangler (the workflow's check job). Without an instance configuration it fails, since there is nothing to check. |
+| `npm run cf -- secret put <NAME>` | Sets a secret of your instance's Worker (Wrangler asks for the value and does not echo it); also `secret list` and `secret delete <NAME>`. |
+| `npm run cf -- tail --format pretty` | The Worker's logs as they happen. |
+| `npm run cf -- rollback`, `versions list`, `deployments list` | Any other Wrangler command, for your instance's Worker. |
+
+The wrapper's options and Wrangler's go after npm's `--`, as above. Without it, npm takes `--instance`, `--secrets-file`, `--validate` and `--dry-run` for itself and the script never sees them, so the run stops when npm has taken one, and names the script you ran: `npm took --instance for itself: put -- before it (npm run check:cf -- --instance=<file>)` after `npm run check:cf --instance=<file>` (for `npm run cf`, `npm run cf -- --instance=<file> <command>`), or, for a deploy, `npm took --dry-run for itself: npm run check:cf, or npm run cf -- deploy --dry-run. Nothing was deployed.`
+
+Options that would leave the instance configuration out are refused, each with where the setting goes instead: `--config`, `--name`, `--env`, `--env-file` and `--cwd` for every command; for a deploy also `--var` (`vars`), `--routes` and `--domains` (`routes`), `--keep-vars` (`keep_vars`) and the compatibility options. So is a `CLOUDFLARE_ENV` in the environment (`CLOUDFLARE_ENV is not passed on: one instance configuration is one Worker; unset it`; Wrangler gets it empty, and `--env=`, its top-level environment, on every run, so that a `.env` or `.env.local` in the checkout cannot choose an environment either), and a `--` among Wrangler's arguments, after npm's own (`-- is not passed on: give Wrangler's options without it`): Wrangler would not read the run's `--config` after it. `wrangler dev` is `npm run dev:cf` ([Local development](#local-development)), which never reads the instance configuration. Refused too: `wrangler preview` (Lyren Plan has no previews), `wrangler triggers deploy` (`npm run deploy:cf` applies routes and workers.dev) and `wrangler types` (`npx wrangler types` reads `wrangler.jsonc`, which is all the code's types need).
+
+A run prints one line per decision, with names only, on stderr: stdout is Wrangler's alone, so `npm run -s cf -- secret list` gives Wrangler's JSON and nothing else. For a custom domain added in the dashboard, workers.dev off and Cloudflare Email Service:
+
+```
+Instance configuration: wrangler.instance.jsonc (from the checkout)
+Worker name: from the instance configuration
+workers.dev: off (the instance configuration)
+Custom domains: none listed; those added in the dashboard stay as they are
+Mail binding: EMAIL (MAIL_TRANSPORT=cloudflare)
+Variables (6): PUBLIC_URL INSTANCE_NAME MAIL_TRANSPORT MAIL_FROM MAIL_FROM_NAME MAIL_DAILY_CAP
+Secrets the Worker must have: none
+App configuration: the file's variables are valid on Cloudflare (server/src/core/config.ts)
+Note: PUBLIC_URL: decide its host before the first passkey: passkeys belong to it, or to WEBAUTHN_RP_ID
+Deploying: wrangler deploy with wrangler.deploy.<id>.jsonc, 6 variables, no secrets file.
+…Wrangler, whose list of bindings shows each variable as "(hidden)"…
+Removed wrangler.deploy.<id>.jsonc.
+```
+
+**A plain `npx wrangler deploy` is refused** in a checkout with an instance configuration (`wrangler.instance.jsonc`, or `LYREN_INSTANCE_FILE` set). `wrangler.jsonc`'s build command, `scripts/cf/build-web.mjs`, lets a deploy or a version upload through only with the token of a run that `scripts/cf/wrangler.mjs` started, and stops any other before anything is built or uploaded: `::error::This checkout has an instance configuration (wrangler.instance.jsonc), but this wrangler deploy does not use it: deploy with npm run deploy:cf (in Workers Builds: Settings → Build → Deploy command). Nothing was uploaded.` So a habit can neither deploy the Worker without its settings nor write the dashboard's values into the tracked `wrangler.jsonc` ([step 8](#8-the-custom-domain)). A file named only with `--instance` is not seen there.
+
+**Without an instance configuration**, `npm run check:cf` checks `wrangler.jsonc` as it is, `npm run cf -- --validate` fails (`No instance configuration to check (--instance, LYREN_INSTANCE_FILE or wrangler.instance.jsonc): cp wrangler.instance.example.jsonc wrangler.instance.jsonc and edit it (docs/cloudflare.md, "Your instance configuration")`), and `npm run deploy:cf` refuses: `No instance configuration: cp wrangler.instance.example.jsonc wrangler.instance.jsonc and edit it, or point LYREN_INSTANCE_FILE at yours (docs/cloudflare.md, "Your instance configuration"). Nothing was deployed.` The one exception is a Workers Builds build (the Deploy button's first one), which deploys `wrangler.jsonc` as it is, on workers.dev.
+
+**Two examples.** A public instance at its custom domain, with workers.dev off and Cloudflare Email Service (Workers Paid):
+
+```jsonc
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lyren-plan",
+  // Each deploy attaches the domain and turns workers.dev off.
+  "routes": [{ "pattern": "plan.example.com", "custom_domain": true }],
+  "vars": {
+    "PUBLIC_URL": "https://plan.example.com",
+    "INSTANCE_NAME": "Lyren Plan",
+    // Each deploy adds the send_email binding EMAIL because of this.
+    "MAIL_TRANSPORT": "cloudflare",
+    "MAIL_FROM": "plan@example.com",
+    "MAIL_DAILY_CAP": "96"
+  }
+}
+```
+
+A team's instance on workers.dev, sending through an SMTP provider:
+
+```jsonc
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "team-plan",
+  // No routes: the instance answers at https://team-plan.<your-subdomain>.workers.dev.
+  "vars": {
+    "PUBLIC_URL": "https://team-plan.<your-subdomain>.workers.dev",
+    "INSTANCE_NAME": "Team plan",
+    "MAIL_TRANSPORT": "smtp",
+    "MAIL_FROM": "plan@example.com",
+    "SMTP_HOST": "smtp.example.com",
+    "SMTP_SECURITY": "tls"
+  },
+  // The account at the provider, kept off the record as a secret of the Worker. SMTP_PASS needs no line:
+  // the app requires it with SMTP_USER.
+  "secrets": { "required": ["SMTP_USER"] }
+}
+```
+
+The second one prints `Secrets the Worker must have: SMTP_PASS SMTP_USER`: set both before its first deploy ([step 4A](#4-deploy)).
+
 ## Deploying, step by step
 
-The first deployment, in order. Steps 5 to 11 are done once, before you invite anybody. Steps 5 and 11 are gates: they show whether the Free plan's CPU limit holds this instance, and if one fails, change what it says (the password hash, or Workers Paid) before anybody else signs up. Steps 8 and 9 are done by hand in the dashboard: they belong to your zone, and nothing of one deployment is in this repository.
+The first deployment, in order. Steps 5 to 11 are done once, before you invite anybody. Steps 5 and 11 are gates: they show whether the Free plan's CPU limit holds this instance, and if one fails, change what it says (the password hash, or Workers Paid) before anybody else signs up. Step 9 is done by hand in the dashboard, and so is step 8 unless your instance configuration lists the domain: they belong to your zone, and nothing of one deployment is in this repository.
 
 ### 1. Decide
 
-The host name (workers.dev, or a custom domain for a public instance), the mail option, and whether passkeys should work for a parent domain (`WEBAUTHN_RP_ID=example.com` for `https://plan.example.com`).
+The Worker's name (`lyren-plan`, or your own), the host name (workers.dev, or a custom domain for a public instance), the mail option, and whether passkeys should work for a parent domain (`WEBAUTHN_RP_ID=example.com` for `https://plan.example.com`).
 
 ### 2. Check the build
 
@@ -63,60 +210,70 @@ npm run check      # typecheck, both test suites (offline), build
 npm run check:cf   # bundles the Worker as a deploy would, offline, into dist/worker
 ```
 
-`check:cf` runs `wrangler deploy --dry-run`: it validates `wrangler.jsonc`, builds the web client, and prints the bundle's size, `Total Upload: 2131.06 KiB / gzip: 410.39 KiB` at the time of writing. The limit is 64 MiB uncompressed and 1 s to start. Nothing is uploaded and no Cloudflare account is needed.
+`check:cf` runs `wrangler deploy --dry-run`: it validates `wrangler.jsonc` (with your instance configuration laid over it, once step 3 has written one), builds the web client, and prints the bundle's size, `Total Upload: 2131.06 KiB / gzip: 410.39 KiB` at the time of writing. The limit is 64 MiB uncompressed and 1 s to start. Nothing is uploaded and no Cloudflare account is needed.
 
-### 3. Settings before the first deployment
+### 3. The instance configuration
 
-- **`PUBLIC_URL`**: the origin people will open, `https://` and a host name. Links in mail and copied links use it, passkeys need it, and the API answers no other origin: elsewhere it answers 421 and the web app moves to `PUBLIC_URL`. So it must be an address that already reaches the Worker when you do steps 5 to 7:
-  - **workers.dev for now**: `https://lyren-plan.<your-subdomain>.workers.dev` (or the name you deploy under), until step 8 adds your domain and sets `PUBLIC_URL` to it.
-  - **Your custom domain from the start** (`https://plan.example.com`): deploy once without `PUBLIC_URL`, add the domain right away ([step 8.1](#8-the-custom-domain)), then set `PUBLIC_URL` to it and deploy again, all before step 5.
+Write [your instance configuration](#your-instance-configuration), in the checkout of step 2 (with way B or C it then goes into your copy of the repository: step 4 says how):
 
-  If you do not know it yet, set it right after the first deployment, before step 5.
-- **`SETUP_TOKEN`** (a secret, recommended): the code that the first-run setup asks for, so that nobody else can claim the new instance. Choose a long random value (`openssl rand -base64 24`). Without it a code is generated and written to the Worker's logs.
-- Any other [variable](#configuration) whose default does not suit you. Never set `MAIL_LOG_BODIES` on an instance others can reach: it writes sign-in links to the logs.
+```sh
+cp wrangler.instance.example.jsonc wrangler.instance.jsonc   # git-ignored; edit the copy
+```
+
+- **`name`**: the Worker's name, `lyren-plan` or your own. Its workers.dev address is `https://<name>.<your-subdomain>.workers.dev`.
+- **`PUBLIC_URL`**, in `vars`: the origin people will open, `https://` and a host name. Links in mail and copied links use it, passkeys need it, and the API answers no other origin: elsewhere it answers 421 and the web app moves to `PUBLIC_URL`. So it must be an address that already reaches the Worker when you do steps 5 to 7:
+  - **Your custom domain** (`https://plan.example.com`, a host in a zone of this account): list it in `routes` as well, `"routes": [{ "pattern": "plan.example.com", "custom_domain": true }]`. The first deploy then attaches it and turns workers.dev off ([step 8](#8-the-custom-domain)).
+  - **workers.dev for now**: `https://<name>.<your-subdomain>.workers.dev`, until step 8 moves the instance to your domain.
+
+  If you do not know it yet, leave it out, and set it right after the first deployment, before step 5.
+- **Mail**: `MAIL_TRANSPORT` stays `log` (nothing is sent) until step 10, or set up the transport of step 10 now (step 4A then says which secrets come first).
+- Any other [variable](#configuration) whose default does not suit you. Never set `MAIL_LOG_BODIES` on an instance others can reach: it writes sign-in links to the logs (the instance configuration refuses it).
+- **`SETUP_TOKEN`** (a secret, recommended; never in the file): the code that the first-run setup asks for, so that nobody else can claim the new instance. Choose a long random value (`openssl rand -base64 24`); step 4 says where it goes. Without it a code is generated and written to the Worker's logs.
+
+`npm run check:cf` (step 2) then checks the file with the app's own rules, and prints what a deploy would do.
 
 ### 4. Deploy
 
-Choose one way. Each gives you a Worker named `lyren-plan` (or the name you choose), its two Durable Object classes (created from the `migrations` of `wrangler.jsonc`) and the web app. Note the `*.workers.dev` address it prints or shows.
+Choose one way. Each gives you a Worker named as your instance configuration's `name`, its two Durable Object classes (created from the `migrations` of `wrangler.jsonc`) and the web app. Note the `*.workers.dev` address it prints or shows (there is none with workers.dev off).
 
-**A. From your computer, with Wrangler.** In the checkout of step 2:
+**A. From your computer, with Wrangler.** In the checkout of step 2, with the instance configuration of step 3:
 
 ```sh
 npx wrangler login                     # opens the browser to authorize Wrangler for your account
-npm run deploy:cf -- --var PUBLIC_URL:https://lyren-plan.<your-subdomain>.workers.dev   # step 3
-npx wrangler secret put SETUP_TOKEN    # asks for the value; it is not echoed or kept in your shell's history
+npm run deploy:cf                      # checks the instance configuration, then deploys with it
+npm run cf -- secret put SETUP_TOKEN   # step 3; asks for the value; it is not echoed or kept in your shell's history
 ```
 
-`npm run deploy:cf` is `wrangler deploy`: it builds the web client, bundles the Worker and uploads both. Each `--var NAME:value` sets a variable, which then stays (`keep_vars`), also across later deploys without it, until you delete it in the dashboard. `--name <name>` deploys under another Worker name. `wrangler secret put` creates a new version with the secret at once; set the secrets before you open the site in step 6. `npx wrangler secret list` shows their names.
+When `npm run check:cf` or the deploy prints `Secrets the Worker must have: …` with names (for a transport set up in step 3: `SMTP_PASS`, say), Wrangler refuses to deploy a new Worker without them: set those first. Either with `npm run cf -- secret put <NAME>` for each, before `npm run deploy:cf`: on a Worker that does not exist yet, Wrangler asks "There doesn't seem to be a Worker called … Do you want to create a new Worker with that name and add secrets to it?", and yes makes an empty Worker with the secret, which the first deploy then replaces. Or upload them with the deploy, `npm run deploy:cf -- --secrets-file=<a JSON file>` ([step 10](#10-mail)). Wrangler's own message is wrong here: it says "This Worker does not exist yet, so secrets cannot be set in advance with `wrangler secret put`", but `secret put` works as above, and of the secrets files it suggests, `SECRET_NAME=value` lines or JSON, the run reads JSON only (`{ "SMTP_PASS": "…" }`).
 
-The deploy script of the workflow also works by hand, with the variables in the environment (it prints their names, never their values): `DRY_RUN=false PUBLIC_URL=https://plan.example.com bash scripts/ci/deploy-cloudflare.sh`. With `DRY_RUN=true` it is the offline check of step 2 with your variables.
+`npm run deploy:cf` builds the web client, bundles the Worker and uploads both, with the instance configuration laid over `wrangler.jsonc` ([what it prints](#your-instance-configuration)). Each variable of the file replaces the Worker's at every deploy; one set in the dashboard that the file does not list stays (`keep_vars`). `npm run cf -- secret put` sets a secret of your instance's Worker and creates a new version with it at once; set the secrets before you open the site in step 6. `npm run cf -- secret list` shows their names. Another instance from the same checkout is another file: `npm run deploy:cf -- --instance=wrangler.instance.staging.jsonc`.
 
-**B. With the GitHub workflow** (`.github/workflows/deploy-cloudflare.yml`, manual only):
+**B. With the GitHub workflow** (`.github/workflows/deploy-cloudflare.yml`, manual only). It deploys a fork, from the instance configuration committed to it; this repository itself has none, and never deploys through the workflow.
 
 1. Fork the repository. GitHub turns workflows off in a fork: on its **Actions** tab, enable them.
-2. In Cloudflare, create an API token (**My Profile → API Tokens → Create Token**) from the **Edit Cloudflare Workers** template, limited to your account (and to the zone, if you use one). Copy your account ID (**Workers & Pages**, on the right, or in the dashboard's address).
+2. In Cloudflare, create an API token (**My Profile → API Tokens → Create Token**) from the **Edit Cloudflare Workers** template, limited to your account (and to the zone, if your instance configuration lists `routes`). Copy your account ID (**Workers & Pages**, on the right, or in the dashboard's address).
 3. In the fork, **Settings → Environments → New environment**, named `cloudflare` (the workflow's):
-   - **Deployment branches and tags**: **Selected branches and tags**, with the rule `main`.
+   - **Deployment branches and tags**: **Selected branches and tags**, with the rule of the branch that will hold your instance configuration: the fork's default branch (`master` for this repository), or, in a fork you also send pull requests from, a branch of its own such as `deploy`, so that the default branch and the branches of your pull requests never carry the file.
    - **Required reviewers**: yourself, and anybody else who may deploy. Every run then waits for an approval before its deploy job starts (the dry run's too).
-   - **Environment secrets**: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; optionally the app's secrets `SETUP_TOKEN`, `SMTP_PASS` and `RESEND_API_KEY`.
+   - **Environment secrets**: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; optionally the app's secrets `SETUP_TOKEN`, `SMTP_USER`, `SMTP_PASS`, `MAIL_REPLY_TO` and `RESEND_API_KEY`, which each deploy uploads with the new version. A secret that your instance configuration requires must be here, or on the Worker already.
 
    Not as repository secrets (**Settings → Secrets and variables → Actions → Secrets**): those reach every workflow run in the repository, so anybody who can push a branch to the fork could read the Cloudflare token with a workflow of their own, without any approval, and deploy whatever they like, which can read every space. An environment's secrets reach only the jobs its rules let run.
-4. **Settings → Secrets and variables → Actions → Variables** (repository variables; the environment's own variables work too): `PUBLIC_URL` and any other app setting of the [configuration reference](#configuration) (36 can be set this way), plus `WORKER_NAME` (default `lyren-plan`), once a custom domain works `WORKERS_DEV=false`, and for Cloudflare Email Service `MAIL_TRANSPORT=cloudflare`, which also adds its binding ([step 10](#cloudflare-email-service)). **Their values are public**: GitHub prints each step's environment at the top of its log (secrets as `***`), and a fork of a public repository is public, its run logs included. Keep a setting you would not publish (`SMTP_USER`, `MAIL_REPLY_TO`, say) out of the variables: set it on the Worker instead, as a **Secret** in the dashboard or with `npx wrangler secret put SMTP_USER`. The app reads the Worker's variables and secrets alike, and later deploys keep it; never set one name both ways.
-5. **Actions → Deploy to Cloudflare → Run workflow**, with **dry_run** ticked (the default). The run bundles the Worker and checks the configuration with your variables, uploads nothing and uses no Cloudflare token. Its log shows `Variables set (<n>): <names>` and the bundle's size.
+4. Commit the instance configuration of step 3 to that branch, as `wrangler.instance.jsonc` at its root (`git add -f wrangler.instance.jsonc`, since `.gitignore` lists it, or **Add file → Create new file** on GitHub). Or commit it anywhere in the branch and set the repository variable `LYREN_INSTANCE_FILE` to its path from the root (**Settings → Secrets and variables → Actions → Variables**: a repository variable, which the check job reads too). **It is as public as the fork**, its history included: `SMTP_USER` and `MAIL_REPLY_TO`, the two settings that may be secrets, can stay out of it: list them in `"secrets": { "required": [...] }` instead, and add them to the environment's secrets. Every other setting is in the file. The app reads the Worker's variables and secrets alike; never set one name both ways.
+5. **Actions → Deploy to Cloudflare → Run workflow**, on that branch, with **dry_run** ticked (the default). The run checks the instance configuration (in its first job, before anybody approves anything; a branch without one stops there), bundles the Worker with it, uploads nothing and uses no Cloudflare token. Its log shows `Variables (<n>): <names>` and the bundle's size.
 6. Run it again with **dry_run** unticked: that deploys.
 
-The workflow has two jobs. **Typecheck, test and build** runs `npm run check` with no secret at all and keeps the built web client. **Deploy** starts on a new runner, installs the dependencies without their install scripts, writes the app's secrets into a private file with `node -e` alone, and runs `wrangler deploy` with your variables as `--var` and the secrets uploaded together with the new version (`--secrets-file`), so the Worker never runs without them. No code from the build or the tests runs where a secret is. Only the deploy job uses the `cloudflare` environment, and so its secrets: with the rules of step 3, nothing is deployed without your approval, and nothing but `main`.
+The workflow has two jobs. **Typecheck, test and build** checks the instance configuration (and fails without one) and runs `npm run check` with no secret at all, and keeps the built web client. **Deploy** starts on a new runner, installs the dependencies without their install scripts, writes the app's secrets into a private file with `node -e` alone, and runs `scripts/cf/wrangler.mjs deploy`: the instance configuration is checked again with the app's own parser (bundled by Wrangler's esbuild, and refused if it ever imports a package), then `wrangler deploy` runs with it, the secrets uploaded together with the new version (`--secrets-file`), so the Worker never runs without them. No code from the build or the tests runs where a secret is. Only the deploy job uses the `cloudflare` environment, and so its secrets: with the rules of step 3, nothing is deployed without your approval, and nothing but the deployment branch.
 
-Two things the workflow never does: it never removes anything. A variable you delete from the repository stays on the Worker (`keep_vars`), and a secret you delete stays too (`--secrets-file` only adds and replaces): delete them in the dashboard (**Workers & Pages → lyren-plan → Settings → Variables and Secrets**) or with `npx wrangler secret delete <NAME>`. And it never sets `RECOVERY_TOKEN` ([Locked out](#locked-out)) or `MAIL_LOG_BODIES`.
+The workflow removes only what the instance configuration says to: the custom domains that `routes` does not list (when it lists any), the workers.dev address with `"workers_dev": false` (which `routes` implies), and the variables the file does not list with `"keep_vars": false`. Anything else stays. A variable you take out of the file stays on the Worker while `keep_vars` is true, and a secret you delete from the environment stays too, because `--secrets-file` only adds and replaces: delete them in the dashboard (**Workers & Pages → lyren-plan → Settings → Variables and Secrets**) or with `npm run cf -- secret delete <NAME>`. And the workflow never sets `RECOVERY_TOKEN` ([Locked out](#locked-out)) or `MAIL_LOG_BODIES`.
 
 **C. With the Deploy to Cloudflare button** (in the README):
 
 1. Click it, sign in to Cloudflare, and connect your GitHub or GitLab account. Cloudflare copies the repository into a new repository of your own (a copy, not a fork) and builds it there with Workers Builds.
-2. Keep the build command that Cloudflare fills in (`npm run build`) and the deploy command (`npx wrangler deploy`): the web client is built once (in a Workers Builds build, `scripts/cf/build-web.mjs` keeps the client that the build command has just built), and nothing else needs setting up.
+2. Keep the build command that Cloudflare fills in (`npm run build`) and the deploy command (`npm run deploy`, `package.json`'s `deploy` script, the same as `npm run deploy:cf`): the web client is built once (in a Workers Builds build, `scripts/cf/build-web.mjs` keeps the client that the build command has just built), and nothing else needs setting up. This first build has no instance configuration, so it deploys `wrangler.jsonc` as it is, on workers.dev.
 3. Cloudflare asks for `SETUP_TOKEN`: enter a long random value, or leave it empty to have a code generated and written to the logs (an empty value counts as unset).
-4. When it is deployed, set `PUBLIC_URL` and your other variables in **Workers & Pages → lyren-plan → Settings → Variables and Secrets** (variables as **Text**, `SMTP_PASS` and `RESEND_API_KEY` as **Secret**). Each change there deploys a new version.
+4. When it is deployed, add the instance configuration of step 3 to your copy, as `wrangler.instance.jsonc` at its root (GitHub's **Add file → Create new file**, or `git add -f wrangler.instance.jsonc` and a push), with the Worker's name as `name`: the build deploys that Worker, and refuses a file that names another. The push deploys it. Secrets go in **Workers & Pages → lyren-plan → Settings → Variables and Secrets**, as **Secret** (`SMTP_PASS`, `RESEND_API_KEY`), before the push that needs them.
 
-Every push to your copy's main branch deploys again. Free Workers Builds allow 3,000 build minutes a month. Your copy is yours to edit: with a custom domain, set `"workers_dev": false` in its `wrangler.jsonc` (step 8), or every build turns workers.dev back on. To update it, pull this repository's changes into your copy (`git remote add upstream https://github.com/<owner>/<repo>.git`, `git pull upstream main`, `git push`).
+Every push to your copy's production branch deploys again. Free Workers Builds allow 3,000 build minutes a month. A copy made before `package.json` had its `deploy` script has `npx wrangler deploy` as its deploy command: set **Settings → Build → Deploy command** to `npm run deploy:cf` before you push the instance configuration, or its builds are refused ("This checkout has an instance configuration (wrangler.instance.jsonc), but this wrangler deploy does not use it"). Builds of other branches run `wrangler versions upload` or `wrangler preview`, which are refused the same way: turn them off (**Settings → Build → Branch control**), or set their deploy command to `npm run cf -- versions upload`. Leave the copy's `wrangler.jsonc` as this repository has it: your settings are in the instance configuration. To update the copy, pull this repository's changes into it (`git remote add upstream https://github.com/<owner>/<repo>.git`, `git pull upstream master`, `git push`): they never touch your instance configuration.
 
 ### 5. Measure the password hash, before any account exists
 
@@ -133,13 +290,13 @@ Whether the Free plan's 10 ms of CPU per request applies to Durable Objects is n
    ```
 
    `401` three times is the answer for a wrong password: the hash fits. `421` means `PUBLIC_URL` is another address (step 3). Anything else (503, or Cloudflare's error 1102) needs a look at the logs.
-2. In the dashboard, look at the Worker's logs and metrics (**Workers & Pages → lyren-plan → Observability**, or `npx wrangler tail --format pretty` while you try) for `exceeded resource limits` and at the CPU time of those requests.
-3. If the attempts fail, set the variable **`PASSWORD_KDF=pbkdf2`** (about 8 ms a hash, 11 ms for the whole sign-in locally, against 22 ms with scrypt) now, and try again. Changing it later does not help the accounts that exist by then: each stored hash is checked at the cost it was made with, so they would need reset links. (scrypt stays the default: it is the stronger hash where it fits, and pbkdf2 did not bring a whole sign-in under 10 ms locally either.)
+2. In the dashboard, look at the Worker's logs and metrics (**Workers & Pages → lyren-plan → Observability**, or `npm run cf -- tail --format pretty` while you try) for `exceeded resource limits` and at the CPU time of those requests.
+3. If the attempts fail, set the variable **`PASSWORD_KDF=pbkdf2`** (about 8 ms a hash, 11 ms for the whole sign-in locally, against 22 ms with scrypt) in the instance configuration's `vars` now, deploy again, and try again. Changing it later does not help the accounts that exist by then: each stored hash is checked at the cost it was made with, so they would need reset links. (scrypt stays the default: it is the stronger hash where it fits, and pbkdf2 did not bring a whole sign-in under 10 ms locally either.)
 4. If ordinary requests fail the same way, the Free plan cannot run this instance: Workers Paid is the way forward ([The Free plan](#the-free-plan-in-plain-words)).
 
 ### 6. The setup code
 
-It is your `SETUP_TOKEN`, or, without one, the code generated when the site is first opened: search the Worker's logs for `Setup code` (**Observability → Logs**, or `npx wrangler tail` while you open the site). A failed setup attempt writes it again.
+It is your `SETUP_TOKEN`, or, without one, the code generated when the site is first opened: search the Worker's logs for `Setup code` (**Observability → Logs**, or `npm run cf -- tail` while you open the site). A failed setup attempt writes it again.
 
 ### 7. The first administrator
 
@@ -147,14 +304,14 @@ Open the site at `PUBLIC_URL` and complete the setup: your email address, your n
 
 ### 8. The custom domain
 
-By hand, in the dashboard (if you added the domain before step 5, as step 3 describes, 8.1 and 8.2 are done):
+In your instance configuration, or by hand in the dashboard. Either way the domain's zone must be in the account, and Cloudflare creates the DNS record and the certificate.
 
-1. Add it: **Workers & Pages → lyren-plan → Settings → Domains & Routes → Add → Custom domain**, for example `plan.example.com` (its zone must be in the account; Cloudflare creates the DNS record and the certificate). Not in `wrangler.jsonc`: nothing of one deployment is committed. In the zone, turn on **SSL/TLS → Edge Certificates → Always Use HTTPS**: the API answers plain HTTP with 421 (the web app then moves to `https://`), but without that setting the web app's files are served over plain HTTP too.
-2. Set `PUBLIC_URL=https://plan.example.com` (and `WEBAUTHN_RP_ID` if passkeys should belong to the parent domain), and deploy again.
-3. Check that a second deployment keeps the domain. If one ever drops it, keep the domain in a `wrangler.local.jsonc` of your own (a copy of `wrangler.jsonc` with `"routes": [{ "pattern": "plan.example.com", "custom_domain": true }]`; git ignores the file) and deploy with `npx wrangler deploy --config wrangler.local.jsonc`.
-4. Turn workers.dev off: with the workflow the repository variable `WORKERS_DEV=false`; from your computer `"workers_dev": false` in your `wrangler.local.jsonc`, or `node scripts/ci/wrangler-config.mjs --workers-dev=false` and `npx wrangler deploy --config wrangler.deploy.jsonc` (that file is git-ignored too; with Cloudflare Email Service, `--workers-dev=false --email-binding`, because the file is written again from `wrangler.jsonc` and a deploy without the binding stops the app: [step 10](#cloudflare-email-service)); with the button, `"workers_dev": false` in your copy's `wrangler.jsonc`.
+- **In the instance configuration** (step 3 may have listed it from the start): `"routes": [{ "pattern": "plan.example.com", "custom_domain": true }]` and `PUBLIC_URL=https://plan.example.com` in `vars`, then deploy again. Each deploy attaches the domain and turns workers.dev off. The list replaces the Worker's custom domains: list every one it should keep. With the workflow, the token must reach the zone too (step 4B).
+- **By hand in the dashboard**: **Workers & Pages → lyren-plan → Settings → Domains & Routes → Add → Custom domain**, for example `plan.example.com`. Then set `PUBLIC_URL=https://plan.example.com` and `"workers_dev": false` in the instance configuration, and deploy again. While it lists no `routes`, a deploy leaves the domains added in the dashboard as they are.
 
-**Wrangler's warning after a change in the dashboard.** The first deploy after a change in the dashboard (a variable, the domain) may stop with "The local configuration being used … differs from the remote configuration of your Worker set via the Cloudflare Dashboard", a diff, and "Would you like to continue?". The diff compares the dashboard's state with the configuration file alone, so it shows the custom domain and every variable of the dashboard (even one passed with `--var`) as removed. Neither is: a deploy changes custom domains only when its configuration lists routes, and this one lists none, and `keep_vars` keeps the variables. What a deploy does apply is the file's `workers_dev` (so deploy with `WORKERS_DEV=false` once workers.dev is off, or it is turned back on), `preview_urls` (off), `observability`, the compatibility date and flags, and its bindings (one added in the dashboard is dropped; hence the email binding with each deploy, [step 10](#cloudflare-email-service)). So answer **yes**; with workers.dev off Wrangler then says "No targets deployed", which is expected: the domain serves the new version. **No** deploys nothing (and Wrangler still exits with 0). Then answer its next question, "Would you like to update the local config file with the remote values?", with **no** too: yes writes the domain and the dashboard's variables into the configuration file, which for a plain `wrangler deploy` is the committed `wrangler.jsonc` (put it back with `git checkout -- wrangler.jsonc`). A run without a terminal (the workflow) goes on by itself. The warning comes back after the next change in the dashboard.
+Then, in the zone, turn on **SSL/TLS → Edge Certificates → Always Use HTTPS**: the API answers plain HTTP with 421 (the web app then moves to `https://`), but without that setting the web app's files are served over plain HTTP too. Set `WEBAUTHN_RP_ID` as well if passkeys should belong to the parent domain. Never in `wrangler.jsonc`: nothing of one deployment is committed.
+
+**Wrangler's warning after a change in the dashboard.** The first deploy after a change in the dashboard (a variable, the domain) may stop with "The local configuration being used … differs from the remote configuration of your Worker set via the Cloudflare Dashboard", a diff, and "Would you like to continue?". It compares the dashboard's state with the configuration the run generated: what it shows as removed is a variable set only in the dashboard, which `keep_vars` keeps, or, while the instance configuration lists no `routes`, the custom domain added in the dashboard, which such a deploy leaves alone. So answer **yes**; with workers.dev off and no `routes`, Wrangler then says "No targets deployed", which is expected: the domain serves the new version. **No** deploys nothing (and Wrangler still exits with 0), and its next question, "Would you like to update the local config file with the remote values?", can only write into the run's generated `wrangler.deploy.<id>.jsonc`, which the run then removes, saying so: `wrangler.jsonc` and your instance configuration stay as they are, and what you want to keep goes into the instance configuration. A run without a terminal (the workflow, Workers Builds) goes on by itself. The warning comes back after the next change in the dashboard.
 
 Do this before inviting anybody or registering passkeys.
 
@@ -170,29 +327,29 @@ The Free plan includes one such rule. Someone it blocks is told "Too many reques
 
 ### 10. Mail
 
-Choose a transport ([Mail](#mail) has the details) and set its variables:
+Choose a transport ([Mail](#mail) has the details), set its variables in the instance configuration's `vars` and its secret on the Worker, and deploy:
 
-- **SMTP**: `MAIL_TRANSPORT=smtp`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY` and `SMTP_USER`, with the secret `SMTP_PASS`. If the test below fails with a connection error (outbound connections may not be allowed on the Free plan), switch to Resend.
+- **SMTP**: `MAIL_TRANSPORT=smtp`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY` and `SMTP_USER` (or `SMTP_USER` as a secret, listed in `secrets.required`), with the secret `SMTP_PASS`. If the test below fails with a connection error (outbound connections may not be allowed on the Free plan), switch to Resend.
 - **Resend**: `MAIL_TRANSPORT=resend`, `MAIL_FROM` at your verified Resend domain and `MAIL_DAILY_CAP=90`, with the secret `RESEND_API_KEY`.
 - **Cloudflare Email Service** (Workers Paid): the [steps below](#cloudflare-email-service).
+
+Whichever it is, put `MAIL_TRANSPORT` in the file together with the settings it needs, `MAIL_FROM` and `PUBLIC_URL`, even where the dashboard has them: a deploy checks the file's variables alone, and refuses a file that lacks them: `MAIL_FROM is required with MAIL_TRANSPORT=smtp (the check reads only this file's variables: put MAIL_FROM here)`.
+
+The app requires `SMTP_PASS` with `SMTP_USER`, and `RESEND_API_KEY` with `resend`, so a deploy requires them of the Worker (`Secrets the Worker must have: SMTP_PASS`), and Wrangler refuses it while the Worker lacks one. Set them first: `npm run cf -- secret put SMTP_PASS` (way A; with way B they are environment secrets, which each deploy uploads; with way C, each one goes in the dashboard as **Secret**). On a Worker that does not exist yet, Wrangler asks "There doesn't seem to be a Worker called … Do you want to create a new Worker with that name and add secrets to it?": yes makes an empty Worker with the secret, which the first deploy then replaces. Or upload it with the deploy, from a file that you remove afterwards: `npm run deploy:cf -- --secrets-file=<file>`, the file a JSON object such as `{ "SMTP_PASS": "…" }` (`scripts/ci/write-secrets-file.sh <file>` writes one, mode 0600, from the environment).
 
 Then **Administration → Overview → Send test email**, and verify your own address (**Account settings → Profile**): inviting by mail needs a verified address.
 
 #### Cloudflare Email Service
 
-Sending to anybody but the account's own verified addresses needs **Workers Paid** (at least $5 a month; it includes 3,000 messages a month, then $0.35 per 1,000), and Email Sending is in beta. The app sends through a `send_email` binding named `EMAIL`. The committed `wrangler.jsonc` has none, so that it suits the Free plan: every deploy adds it (step 5 below). Nothing of it is secret.
+Sending to anybody but the account's own verified addresses needs **Workers Paid** (at least $5 a month; it includes 3,000 messages a month, then $0.35 per 1,000), and Email Sending is in beta. The app sends through a `send_email` binding named `EMAIL`. The committed `wrangler.jsonc` has none, so that it suits the Free plan: `MAIL_TRANSPORT=cloudflare` in your instance configuration adds it to every deploy (step 4 below). Nothing of it is secret.
 
 1. **Workers Paid.** Subscribe the account to it, in the dashboard's **Workers & Pages** section. (A request may then use 30 s of CPU time: the Free plan's 10 ms of steps 5 and 11 no longer applies.)
 2. **Onboard the sending domain.** **Compute → Email Service → Email Sending → Onboard Domain**, choose the domain (a zone on Cloudflare DNS, in this account), review the records and select **Done**. Cloudflare adds MX records and an SPF record on `cf-bounce.<domain>`, a DKIM record on `cf-bounce._domainkey.<domain>` and a DMARC record on `_dmarc.<domain>` (`v=DMARC1; p=reject;`), usually within 5 to 15 minutes (up to 24 hours; **Email Sending → Settings** shows them). The domain needs no MX of its own for this, so mail it receives elsewhere is not affected. Cloudflare's docs do not say what happens to a `_dmarc` record that is already there: if the domain already sends mail through another provider, onboard a subdomain instead, for example the app's own `plan.example.com` (a separate sending domain with records of its own), and send from an address there.
 3. **Turn Email preview off.** In the domain's settings under **Email Sending**, turn off **Enable email preview** (on by default for new sending domains): it keeps each message, readable in the dashboard's Activity log for about seven days, and invitations, password resets and verification messages hold links that work.
-4. **The variables**: `MAIL_TRANSPORT=cloudflare`, `MAIL_FROM` at the onboarded domain (`plan@example.com`), `PUBLIC_URL` (step 3), optionally `MAIL_FROM_NAME` and `MAIL_REPLY_TO`, and `MAIL_DAILY_CAP=96` to stay within the 3,000 included messages in a 31-day month (the allowance is the whole account's, every Worker in it; mail to its verified addresses is free). No secret. Set `MAIL_TRANSPORT=cloudflare` with the deploy that adds the binding (step 5), not before it: a version with it but without the binding answers 503, and a change in the dashboard deploys at once. With the dashboard (always with the button), deploy the binding first, then save `MAIL_TRANSPORT`; a binding without it does no harm.
-5. **Deploy with the binding, every time.** A deploy keeps the Worker's variables but not its bindings: one without the binding leaves `MAIL_TRANSPORT=cloudflare` with nothing to send through, and the app stops working until a deploy with it (API requests answer 503, the directory's with "Configuration error: MAIL_TRANSPORT=cloudflare needs a send_email binding named EMAIL …"). So never a plain `npm run deploy:cf`:
-   - **From your computer, with the deploy script**: put `MAIL_TRANSPORT=cloudflare` among its variables, and it adds the binding itself: `DRY_RUN=false MAIL_TRANSPORT=cloudflare MAIL_FROM=plan@example.com bash scripts/ci/deploy-cloudflare.sh` (with `WORKERS_DEV=false` too after step 8). When `MAIL_TRANSPORT` is set in the dashboard instead, pass `EMAIL_BINDING=true`, every time. It prints `Email binding: EMAIL, for Cloudflare Email Service`.
-   - **From your computer, with Wrangler**: `node scripts/ci/wrangler-config.mjs --email-binding` (with `--workers-dev=false` too after step 8) writes `wrangler.deploy.jsonc` (git-ignored), `wrangler.jsonc` with the binding; then `npx wrangler deploy --config wrangler.deploy.jsonc --var MAIL_TRANSPORT:cloudflare --var MAIL_FROM:plan@example.com`. Later deploys need only `npx wrangler deploy --config wrangler.deploy.jsonc` (the variables stay). Write the file again after each update of your checkout. With a `wrangler.local.jsonc` of your own (step 8.3), add `"send_email": [{ "name": "EMAIL" }]` to it instead.
-   - **The workflow**: the repository variables `MAIL_TRANSPORT=cloudflare` and `MAIL_FROM` (the binding then comes with each deploy), or `EMAIL_BINDING=true` when `MAIL_TRANSPORT` is set in the dashboard.
-   - **The button**: add `"send_email": [{ "name": "EMAIL" }]` to your copy's `wrangler.jsonc` and push.
+4. **The variables**, in the instance configuration's `vars`: `MAIL_TRANSPORT=cloudflare`, `MAIL_FROM` at the onboarded domain (`plan@example.com`), `PUBLIC_URL` (step 3), optionally `MAIL_FROM_NAME` and `MAIL_REPLY_TO`, and `MAIL_DAILY_CAP=96` to stay within the 3,000 included messages in a 31-day month (the allowance is the whole account's, every Worker in it; mail to its verified addresses is free). No secret. `MAIL_TRANSPORT=cloudflare` there is all the binding needs: every deploy from the instance configuration then carries it (`Mail binding: EMAIL (MAIL_TRANSPORT=cloudflare)`), so the variable and its binding always arrive together. Keep `MAIL_TRANSPORT` in the file, with `MAIL_FROM` and `PUBLIC_URL`, not in the dashboard: a deploy keeps the Worker's variables but not its bindings, so one whose file has no `MAIL_TRANSPORT` leaves a dashboard's `cloudflare` with nothing to send through, and the app stops working until a deploy with the binding (API requests answer 503, the directory's with "Configuration error: MAIL_TRANSPORT=cloudflare needs a send_email binding named EMAIL …"). A run without `MAIL_TRANSPORT` in the file says so in a note: `MAIL_TRANSPORT is not in the file: the Worker keeps the one it has; put MAIL_TRANSPORT and the settings it needs (MAIL_FROM, PUBLIC_URL) here so that the check sees them`.
+5. **Deploy**: `npm run deploy:cf`, the workflow, or a push to your copy. A plain `npx wrangler deploy`, which would leave the binding out, is refused in a checkout with an instance configuration ([Your instance configuration](#your-instance-configuration)).
 
-   Wrangler lists `env.EMAIL (unrestricted)  Send Email` among the bindings (a dry run shows it too). "Unrestricted" is right: the app mails whoever it invites. In your own configuration, `"allowed_sender_addresses": ["plan@example.com"]` (exactly `MAIL_FROM`) limits the sender; never set `destination_address` or `allowed_destination_addresses`, which limit the recipients.
+   Wrangler lists `env.EMAIL (unrestricted)  Send Email` among the bindings (`npm run check:cf` shows it too). "Unrestricted" is right: the app mails whoever it invites. To limit the sender, list the binding in the instance configuration yourself, `"send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["plan@example.com"] }]`, with `MAIL_FROM` among the addresses (a run checks it). A binding limited to some recipients (`destination_address`, `allowed_destination_addresses`) is refused.
 6. **Test it**: **Administration → Overview → Send test email**, then invite an address outside the account: the test goes to your own address, and if that is a verified destination address of the account (Email Routing), Cloudflare delivers it even without Workers Paid or a finished onboarding. A failed invitation says only "The invitation email could not be sent"; Workers Logs then has `[lyren] Mail not sent: invitation to an address at …` with the reason. A refusal names Cloudflare's code: `E_SENDER_NOT_VERIFIED` or `E_SENDER_DOMAIN_NOT_AVAILABLE` (`MAIL_FROM` is not at an onboarded domain, or its records are not ready yet), `E_RECIPIENT_SUPPRESSED` (that address bounced or complained before: Cloudflare's suppression list), `E_DAILY_LIMIT_EXCEEDED` or `E_RATE_LIMIT_EXCEEDED` (a new account starts with a small daily quota that grows with use). **Email Sending → Analytics** and the Activity log show what was sent.
 
 ### 11. A passkey, and the heavy requests
@@ -223,7 +380,7 @@ Cloudflare keeps Durable Object data durably, but there is no backup download on
 
 ### 15. Upgrades
 
-Bring the new version into the repository you deploy from and deploy as before; roll back as in [Upgrades and rollbacks](#upgrades-and-rollbacks).
+From your computer: `git pull`, `npm ci`, `npm run deploy:cf`. With the workflow: **Sync fork** on the fork's page (and, with a `deploy` branch of step 4B, merge the default branch into it), then run it. With the button: pull this repository's changes into your copy and push (step 4C). Nothing in the instance configuration needs editing. Roll back as in [Upgrades and rollbacks](#upgrades-and-rollbacks).
 
 ### 16. When a limit is reached
 
@@ -235,12 +392,12 @@ When no administrator can sign in: [Locked out](#locked-out).
 
 ## Configuration
 
-Every setting is a variable or a secret of the Worker: in the dashboard (**Workers & Pages → lyren-plan → Settings → Variables and Secrets**: **Text** for variables, **Secret** for secrets), with `--var NAME:value` at deploy time (`keep_vars` keeps it), as a repository variable for the workflow, or in `.dev.vars` for `wrangler dev`. Secrets are set with `npx wrangler secret put <NAME>` or in the dashboard, never in a file of the repository.
+Every setting is a variable or a secret of the Worker. Variables go in `vars` of your [instance configuration](#your-instance-configuration), which every deploy sends (as text: `"MAIL_DAILY_CAP": "96"`; a number, `true` or `false` is sent as text too), or in `.dev.vars` for `wrangler dev`. Secrets are set on the Worker, with `npm run cf -- secret put <NAME>` or in the dashboard (**Workers & Pages → lyren-plan → Settings → Variables and Secrets**, as **Secret**), never in a file of the repository or in the instance configuration. A variable set in the dashboard (as **Text**) works too, and stays across deploys (`keep_vars`) while the instance configuration does not list it; for every name it lists, the file wins. But a deploy checks the file's variables alone ([what the check sees](#your-instance-configuration)): a setting that they depend on goes in the file too (`MAIL_FROM` and `PUBLIC_URL` with `MAIL_TRANSPORT`, `PUBLIC_URL` with `WEBAUTHN_RP_ID`), and the simplest is to move every **Text** variable of the dashboard into the file.
 
-- An empty value, or one of spaces, counts as unset: the dashboard and the Deploy button make them easy to create.
-- An invalid value makes every API request answer 503 with the reason (`Configuration error: Invalid value for …`), naming the variable and never a secret's value. Fix it and the next request works.
+- An empty value, or one of spaces, counts as unset: the dashboard and the Deploy button make them easy to create. The instance configuration refuses one: remove the line instead.
+- An invalid value makes every API request answer 503 with the reason (`Configuration error: Invalid value for …`), naming the variable and never a secret's value. Fix it and the next request works. A deploy first checks the instance configuration's variables, those alone, with the same parser, and refuses an invalid one.
 - Booleans are true for `1`, `true`, `yes` or `on`, in any case. Numbers are whole numbers; `0` means no limit where the table says so.
-- Any variable may be set as a secret instead, when its value should not be shown: the dashboard shows variables' values, and the workflow's log shows the repository variables' ([step 4B](#4-deploy)). The app reads both alike.
+- `SETUP_TOKEN`, `SMTP_PASS`, `RESEND_API_KEY` and `RECOVERY_TOKEN` are always secrets. `SMTP_USER` and `MAIL_REPLY_TO` may be either: as secrets their values are not shown (the dashboard shows variables' values, and an instance configuration committed to a public repository shows its own), and listed in the file's `secrets.required`, a deploy checks that the Worker has them. Every other setting goes in `vars`: a deploy's check cannot read a secret's value, so a setting kept as a secret is unset as far as the check knows. The app reads variables and secrets alike; never set one name both ways: a variable whose name is a secret of the Worker replaces that secret ([Moving to an instance configuration](#moving-to-an-instance-configuration) says what Wrangler asks then).
 - The defaults below are Cloudflare's, chosen for the Free plan. The [README's configuration](../README.md#configuration) lists the Node defaults, which differ where noted.
 - A Worker can have 64 variables and secrets; Lyren Plan reads 41.
 
@@ -268,16 +425,16 @@ Every setting is a variable or a secret of the Worker: in the dashboard (**Worke
 | `MAIL_TRANSPORT` | `log` | | `log` (nothing is sent), `smtp`, `resend` or `cloudflare` (Workers Paid, with the `EMAIL` binding: [step 10](#cloudflare-email-service)). |
 | `MAIL_FROM` | | | The sender address, required for every transport but `log`. |
 | `MAIL_FROM_NAME` | `INSTANCE_NAME` | | The sender name. |
-| `MAIL_REPLY_TO` | | | An address for replies. |
+| `MAIL_REPLY_TO` | | may be | An address for replies. |
 | `MAIL_DAILY_CAP` | `200` | | Messages per UTC day; 40% of them for mail that anonymous requests cause. `90` with Resend's free plan, `96` to stay within Cloudflare Email Service's 3,000 included a month. |
 | `SMTP_HOST` | | | The provider's submission server, `smtp.example.com`. |
 | `SMTP_SECURITY` | `tls` | | `tls` (port 465) or `starttls` (587; the server must offer it). `none` only for a mail catcher on this machine under `wrangler dev`. |
 | `SMTP_PORT` | `465`, or `587` with `starttls` | | Port 25 is blocked on Workers. |
-| `SMTP_USER` | | | The account at the provider, with `SMTP_PASS`. |
+| `SMTP_USER` | | may be | The account at the provider, with `SMTP_PASS`. |
 | `SMTP_PASS` | | yes | Its password. |
 | `SMTP_EHLO_NAME` | the host of `PUBLIC_URL` | | The name the client introduces itself with. |
 | `RESEND_API_KEY` | | yes | With `MAIL_TRANSPORT=resend`. |
-| `MAIL_LOG_BODIES` | off | | Development only: the `log` transport writes whole messages, links included, so that sign-up, forgotten passwords, verification and email changes work from the links in the logs. Warned about everywhere on Cloudflare; never on an instance others can reach. The workflow does not pass it. |
+| `MAIL_LOG_BODIES` | off | | Development only: the `log` transport writes whole messages, links included, so that sign-up, forgotten passwords, verification and email changes work from the links in the logs. Warned about everywhere on Cloudflare; never on an instance others can reach. An instance configuration refuses it: `.dev.vars` only. |
 | **Quotas** (`0` = no limit) | | | |
 | `MAX_SPACES_PER_USER` | `5` (Node 0) | | Spaces an account owns, deleted ones included until they are removed. |
 | `SPACES_CREATED_PER_DAY` | `10` (Node 0) | | Spaces an account may create a day. |
@@ -295,35 +452,57 @@ Every setting is a variable or a secret of the Worker: in the dashboard (**Worke
 | **Logging** | | | |
 | `LOG_REQUESTS` | off | | One line per API request in the Worker's logs (`[lyren] GET /api/… 200`). |
 
-**For the workflow only** (repository variables, or the deploy script's environment by hand; the app does not read them): `WORKER_NAME` (default `lyren-plan`, passed as `--name`), `WORKERS_DEV` (`false` deploys with workers.dev off) and `EMAIL_BINDING` (`true` deploys with the `send_email` binding `EMAIL` of Cloudflare Email Service; unset, it is on when `MAIL_TRANSPORT=cloudflare` is among the variables, and `false` with that is refused). The workflow sets `LYREN_PREBUILT=1` itself (the built web client is used as it is), and `DRY_RUN` from its input. Its secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are Wrangler's.
+**The instance configuration's other keys** ([Your instance configuration](#your-instance-configuration)): the Worker's `name`, its custom domains (`routes`), `workers_dev`, `keep_vars`, the secrets it must have (`secrets`), `send_email`, `limits` and a few more of Wrangler's. The deploy scripts read `LYREN_INSTANCE_FILE` (the instance configuration's path, when it is not `wrangler.instance.jsonc` in the checkout) and `LYREN_PREBUILT=1` (the workflow's: the built web client is used as it is); the workflow's secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are Wrangler's. The app reads none of them.
 
-**Not read on Cloudflare**: the Node server's `PORT`, `HOST`, `DATA_DIR`, `DB_PATH`, `WEB_DIR`, `TRUST_PROXY` (the client's address is `CF-Connecting-IP`), `COOKIE_SECURE` (the cookie is `Secure` over HTTPS), `SNAPSHOT_KEEP`, `SPACES_OPEN_MAX`, `ALLOW_ADMIN_BACKUP_DOWNLOAD` and `LYREN_DB_STRICT`.
+**Not read on Cloudflare** (an instance configuration refuses them): the Node server's `PORT`, `HOST`, `DATA_DIR`, `DB_PATH`, `WEB_DIR`, `TRUST_PROXY` (the client's address is `CF-Connecting-IP`), `COOKIE_SECURE` (the cookie is `Secure` over HTTPS), `SNAPSHOT_KEEP`, `SPACES_OPEN_MAX`, `ALLOW_ADMIN_BACKUP_DOWNLOAD` and `LYREN_DB_STRICT`.
 
 ## Mail
 
-Nothing is sent until `MAIL_TRANSPORT` is set: with the default, `log`, each message is a line in Workers Logs that names the kind of message and the recipient's domain. The flows that only work by mail (sign-up, forgotten passwords, email verification) are off, invitations are links the inviter passes on, and an email change applies at once, unverified. Every other transport needs `MAIL_FROM` (the sender address) and `PUBLIC_URL` (the links). Set variables in the dashboard or with `--var`, and the two secrets, `SMTP_PASS` and `RESEND_API_KEY`, with `npx wrangler secret put <NAME>`; neither appears in a log line, an error or an API answer. A setting that is not valid makes the API answer 503 with the reason.
+Nothing is sent until `MAIL_TRANSPORT` is set: with the default, `log`, each message is a line in Workers Logs that names the kind of message and the recipient's domain. The flows that only work by mail (sign-up, forgotten passwords, email verification) are off, invitations are links the inviter passes on, and an email change applies at once, unverified. Every other transport needs `MAIL_FROM` (the sender address) and `PUBLIC_URL` (the links). Set the variables in your instance configuration's `vars`, and the two secrets, `SMTP_PASS` and `RESEND_API_KEY`, with `npm run cf -- secret put <NAME>` (before the deploy that requires them: [step 10](#10-mail)); neither appears in a log line, an error or an API answer. A setting that is not valid makes the API answer 503 with the reason.
 
 - **`smtp`**: our own client over `cloudflare:sockets` (design §5.10.4). `SMTP_HOST`, `SMTP_SECURITY=tls` (port 465, preferred) or `starttls` (587; the server must offer STARTTLS, or nothing is sent), `SMTP_USER` with the secret `SMTP_PASS`, and optionally `SMTP_PORT` and `SMTP_EHLO_NAME` (default the host of `PUBLIC_URL`). The certificate is verified against `SMTP_HOST`. Port 25 is blocked on Workers. Whether outbound TCP connections work on the Free plan is not documented: the test message (step 10) shows it, and Resend is the fallback. Any provider's submission server works (yours, or a personal mail account with an app password), and needs no domain of your own.
 - **`resend`**: Resend's HTTP API with the secret `RESEND_API_KEY`. Add and verify your sending domain at Resend first (it gives you the DNS records), create an API key with sending access, and use an address at that domain as `MAIL_FROM`. Its free plan sends 100 messages a day, so set `MAIL_DAILY_CAP=90`.
-- **`cloudflare`**: Cloudflare Email Service (Workers Paid, beta), through the `send_email` binding `EMAIL`, which every deploy must add because the committed `wrangler.jsonc` has none (`EMAIL_BINDING`, or `MAIL_TRANSPORT=cloudflare` among the deploy script's variables). The sender's domain is a zone on Cloudflare, onboarded for sending. No secret. Without the binding the directory answers 503 with the reason (the web app's files and `/api/health` still answer). The steps: [Cloudflare Email Service](#cloudflare-email-service).
+- **`cloudflare`**: Cloudflare Email Service (Workers Paid, beta), through the `send_email` binding `EMAIL`, which `MAIL_TRANSPORT=cloudflare` in the instance configuration adds to every deploy (the committed `wrangler.jsonc` has none). The sender's domain is a zone on Cloudflare, onboarded for sending. No secret. Without the binding the directory answers 503 with the reason (the web app's files and `/api/health` still answer). The steps: [Cloudflare Email Service](#cloudflare-email-service).
 
 `MAIL_DAILY_CAP` (default 200) bounds the messages a day (UTC); mail that anonymous requests cause (sign-up, forgotten passwords, notices of failed sign-ins) can use at most 40% of it, so invitations and verifications always have room, and one address gets at most 5 a day apart from security notices. Once mail is configured, an instance admin sends a test message to their own address from **Administration → Overview** (`POST /api/admin/mail/test`), which shows the server's error when it fails. Messages other than invitations and the test are sent just after the answer to the request that caused them, in the background of the directory object.
 
-Locally, `wrangler dev` reaches servers on 127.0.0.1 and `localhost`: a mail catcher there works with `SMTP_HOST=localhost`, its port and `SMTP_SECURITY=none` (accepted only for this machine, and without credentials). To try TLS against a local server with a certificate of your own, start `wrangler dev` with `NODE_EXTRA_CA_CERTS=<your CA's PEM file>`, which the local runtime then trusts.
+Locally, `wrangler dev` reaches servers on 127.0.0.1 and `localhost`: a mail catcher there works with `SMTP_HOST=localhost`, its port and `SMTP_SECURITY=none` in `.dev.vars` (accepted only for this machine, and without credentials; an instance configuration refuses both). To try TLS against a local server with a certificate of your own, start `wrangler dev` with `NODE_EXTRA_CA_CERTS=<your CA's PEM file>`, which the local runtime then trusts.
 
 ## Hostnames, passkeys and workers.dev
 
-- **workers.dev or a custom domain.** `lyren-plan.<your-subdomain>.workers.dev` is free and works at once. A custom domain needs the domain's DNS on Cloudflare and is added in the dashboard (step 8), not in `wrangler.jsonc`.
-- **Turn workers.dev off once the custom domain works.** The committed `wrangler.jsonc` says `"workers_dev": true` (a first deployment needs some address), and Wrangler applies it at every deploy: hence `WORKERS_DEV=false` for the workflow, `"workers_dev": false` in a `wrangler.local.jsonc` or `wrangler.deploy.jsonc` for deploys from your computer, and in your copy's `wrangler.jsonc` with the button. With `PUBLIC_URL` set, a workers.dev address that was left on serves only the web app, which moves to `PUBLIC_URL`: its API answers 421.
+- **workers.dev or a custom domain.** `<name>.<your-subdomain>.workers.dev` is free and works at once. A custom domain needs the domain's DNS on Cloudflare, and is listed in `routes` of your instance configuration or added in the dashboard (step 8), never in `wrangler.jsonc`.
+- **Turn workers.dev off once the custom domain works.** The committed `wrangler.jsonc` says `"workers_dev": true` (a first deployment needs some address), and Wrangler applies the deploying configuration's value at every deploy: so an instance with a custom domain has `"workers_dev": false` in its instance configuration, or lists the domain in `routes`, which turns workers.dev off by itself. A run whose `PUBLIC_URL` is a custom domain while the file has neither warns that the deploy turns workers.dev on. With `PUBLIC_URL` set, a workers.dev address that was left on serves only the web app, which moves to `PUBLIC_URL`: its API answers 421.
 - **A public instance needs a custom domain and the rate-limiting rule** (step 9). Zone rules never apply to `*.workers.dev`.
 - **Passkeys belong to their RP ID**, by default `PUBLIC_URL`'s host. A move to another host (from workers.dev to your domain, say) leaves every passkey registered before it unusable: they are shown as "Doesn't work here", people sign in with their password and register a new passkey, and accounts that have only passkeys need reset links (**Administration** warns and lists them; for an administrator's account, the recovery token). So **choose the final host name before people register passkeys**. `WEBAUTHN_RP_ID=example.com` with `PUBLIC_URL=https://plan.example.com` keeps passkeys working for any later host under `example.com`.
 - **Passkeys and the web app** need the page to be opened at `PUBLIC_URL` itself, over HTTPS (or `http://localhost` under `wrangler dev`).
 
 ## Upgrades and rollbacks
 
-- **Upgrade**: bring the new version into the repository you deploy from (a pull, or `git pull upstream main` in a fork or a button's copy), check it (`npm run check:cf`, or the workflow's dry run), and deploy. The objects upgrade their databases when they next start; each upgrade first checks that nothing would be lost.
-- **Roll back**: `npx wrangler rollback` (or **Workers & Pages → lyren-plan → Deployments**, a previous version, **Rollback**) puts back an earlier version of the code. **Durable Object data is not rolled back.** A version that knows an older database layout still opens a newer one when the newer layout only added things (every database migration says which older versions can still read it), so a rollback across such changes is safe. Otherwise the objects answer 503 "This data was upgraded by a newer version of Lyren Plan. Deploy that version again." The release notes say when a version cannot be rolled back.
+- **Upgrade**: bring the new version into the branch you deploy from (`git pull` and `npm ci` in a checkout; **Sync fork**, or `git pull upstream master`, in a fork or a button's copy, then a merge into a fork's `deploy` branch), check it (`npm run check:cf`, or the workflow's dry run), and deploy (`npm run deploy:cf`, the workflow, or the push). Nothing in the instance configuration needs editing: it holds only your instance's settings, and what the new version changes in `wrangler.jsonc` (a compatibility date, a Durable Object migration) reaches your instance at that deploy. A setting that a later version retires is refused by name, with what replaces it, never ignored. The objects upgrade their databases when they next start; each upgrade first checks that nothing would be lost.
+- **Roll back**: `npm run cf -- rollback` (or **Workers & Pages → lyren-plan → Deployments**, a previous version, **Rollback**) puts back an earlier version of the code. **Durable Object data is not rolled back.** A version that knows an older database layout still opens a newer one when the newer layout only added things (every database migration says which older versions can still read it), so a rollback across such changes is safe. Otherwise the objects answer 503 "This data was upgraded by a newer version of Lyren Plan. Deploy that version again." The release notes say when a version cannot be rolled back.
 - **The Durable Object classes** (`migrations` in `wrangler.jsonc`) are append-only: never edit or remove a tag that has been deployed.
+
+## Moving to an instance configuration
+
+A deployment made before instance configurations keeps its settings on the Worker (variables in the dashboard, or the workflow's repository variables) and was deployed with `--var`, `--name`, `WORKERS_DEV=false`, `EMAIL_BINDING`, `scripts/ci/deploy-cloudflare.sh`, `scripts/ci/wrangler-config.mjs` or a `wrangler.local.jsonc` of your own. None of these is read any more: `npm run deploy:cf` refuses to deploy without an instance configuration, and one that lists `WORKER_NAME`, `WORKERS_DEV` or `EMAIL_BINDING` in `vars` is refused with what replaces each. Write it once, from what the Worker has, in about ten minutes (from your computer; a fork and a button's copy, below):
+
+1. `git pull` and `npm ci` in your checkout. A `wrangler.deploy.jsonc` that `scripts/ci/wrangler-config.mjs` left there is no longer read (a run notes it: `wrangler.deploy.jsonc is left from an earlier version and no longer read: remove it`): remove it. A `wrangler.local.jsonc` is no longer read either (a run notes it): its settings go into the instance configuration.
+2. In the dashboard, open **Workers & Pages → lyren-plan → Settings → Variables and Secrets**: it lists the Worker's variables and secrets.
+3. `cp wrangler.instance.example.jsonc wrangler.instance.jsonc`, and in it:
+   - `name`: the Worker's name, as the dashboard shows it.
+   - `vars`: every **Text** variable, with its value. The check reads only the file's variables ([what the check sees](#your-instance-configuration)), so one left in the dashboard can make it refuse what the Worker accepts, or pass what the Worker would refuse. Edit the example's own lines (`INSTANCE_NAME`, `MAIL_TRANSPORT` and the commented ones) rather than adding others next to them, and list each variable once: a name given twice is refused (`<file>:<line>:<column>: "vars.MAIL_TRANSPORT" is given twice`). A **JSON** variable was ignored by the app, which reads text only: write it as text to have it apply. Leave out `MAIL_LOG_BODIES` (development only) and any name the [Configuration](#configuration) table does not have.
+   - The secrets `SETUP_TOKEN`, `SMTP_PASS`, `RESEND_API_KEY` and `RECOVERY_TOKEN` stay where they are, on the Worker, and so may `SMTP_USER` and `MAIL_REPLY_TO`, which you may list in `"secrets": { "required": [...] }`. Any other setting the Worker keeps as a secret (`MAIL_FROM`, say) moves into `vars`, with its value (step 5 says what Wrangler asks then).
+   - `"workers_dev": false` when workers.dev is off (with a custom domain, it is: step 8). Without it the deploy turns workers.dev back on, and the run warns.
+   - With Cloudflare Email Service, `MAIL_TRANSPORT=cloudflare` in `vars` brings the binding `EMAIL` with every deploy, in place of `EMAIL_BINDING`. A binding limited to some senders: copy it as `send_email`.
+   - `routes` is optional: without it the custom domain stays as the dashboard has it. To have every deploy attach it instead, list it there with every other custom domain of the Worker (the list replaces them).
+4. `npm run check:cf`: it checks the file with the app's own rules and prints what the deploy will do, `Mail binding: EMAIL (MAIL_TRANSPORT=cloudflare)` and `Variables (<n>): …` among it.
+5. `npx wrangler whoami` (`npx wrangler login` when it says you are not logged in), then `npm run deploy:cf`. If the last change was made in the dashboard, Wrangler shows its diff and asks "Would you like to continue?": answer **y** ([step 8](#8-the-custom-domain) says what the diff shows). If a variable of the file is a secret of the Worker (step 3), Wrangler then says "Environment variable `MAIL_FROM` conflicts with an existing remote secret. This deployment will replace the remote secret with your environment variable." and asks "Would you like to continue?": **y** deploys, and the variable replaces the secret; **n** deploys nothing. Without a terminal (the workflow, Workers Builds), Wrangler goes on by itself.
+6. Check `https://plan.example.com/api/health`, then **Administration → Overview → Send test email**.
+7. Keep a copy of the file outside the checkout, or move it there and set `LYREN_INSTANCE_FILE`. Variables set only in the dashboard stay (`keep_vars`); once the file lists every one you want, delete the others there, or add `"keep_vars": false` to have each deploy remove them.
+
+**A fork with the workflow**: first bring the new version into the fork (**Sync fork** on its page, or `git pull upstream master` and a push), then do steps 1 to 4 in a clone of it, and commit the file to the branch the workflow deploys (step 4B). Add `SMTP_USER` or `MAIL_REPLY_TO` to the `cloudflare` environment's secrets if the file requires them. Delete the old repository variables (the settings, `WORKER_NAME`, `WORKERS_DEV`, `EMAIL_BINDING`): nothing reads them any more. Check the environment's deployment branch: the branch that holds the file, the fork's default branch (`master` for this repository; earlier instructions said `main`) or a `deploy` branch of its own (step 4B). Then run the workflow on that branch, with **dry_run** first.
+
+**A button's copy**: in a clone of the copy, first bring the new version in: pull this repository's changes (`git pull upstream master`) and put back its `wrangler.jsonc` (`git checkout upstream/master -- wrangler.jsonc`): an instance configuration refuses a `wrangler.jsonc` that carries `"workers_dev": false` or `send_email`, which earlier instructions put there. Push nothing yet: a build of that alone would deploy `wrangler.jsonc` as it is, with workers.dev on and no `EMAIL` binding. Then write the instance configuration as in steps 2 and 3, its `name` the Worker that the builds deploy, with the settings that `wrangler.jsonc` carried (`"workers_dev": false`; `MAIL_TRANSPORT=cloudflare` in `vars`). Set **Settings → Build → Deploy command** to `npm run deploy:cf`, then commit the file (`git add -f wrangler.instance.jsonc`) and push it all at once.
 
 ## Backups, and moving to a server of your own
 
@@ -338,12 +517,12 @@ Cloudflare stores Durable Object data durably, but offers no file to download: o
 
 There is no command line on Cloudflare, so when no administrator can sign in, the recovery token is the way back in:
 
-1. Set the secret: `npx wrangler secret put RECOVERY_TOKEN`, with a random value of at least 32 characters (for example from `openssl rand -base64 33`).
+1. Set the secret: `npm run cf -- secret put RECOVERY_TOKEN` (or in the dashboard, as **Secret**), with a random value of at least 32 characters (for example from `openssl rand -base64 33`).
 2. Open `/recover` on the instance (for example `https://plan.example.com/recover`) and enter the token and the account's email address. You get a reset link that works once, for 24 hours. When no active administrator is left, the account becomes one.
 3. Choose a new password with the link, and sign in.
-4. Delete the secret: `npx wrangler secret delete RECOVERY_TOKEN`. **Administration → Overview** warns while it is set.
+4. Delete the secret: `npm run cf -- secret delete RECOVERY_TOKEN`. **Administration → Overview** warns while it is set.
 
-Whoever knows the token can get a reset link for any account while it is set. The account is told at its next sign-in and in its security events, and every admin's overview lists each use. A deploy never sets or removes it: the workflow refuses a secrets file that lists it.
+Whoever knows the token can get a reset link for any account while it is set. The account is told at its next sign-in and in its security events, and every admin's overview lists each use. A deploy never sets or removes it: an instance configuration refuses it, and a deploy refuses a secrets file that lists it.
 
 ## The Free plan in plain words
 
@@ -363,7 +542,7 @@ When a limit is reached:
 - **A space's own budget** (`SPACE_DAILY_ROW_WRITES`): that space's changes answer 429 until 00:00 UTC, the others go on. A full space (`SPACE_MAX_BYTES`) takes no new content until something is deleted.
 - **Workers Logs** stop for the rest of the day at their own limit (200,000 events a day; 0.5 GB from December 2026), setup codes included.
 
-**Workers Paid** needs no code change: CPU time is 30 s a request by default (`limits.cpu_ms` in your own configuration changes it), set `PASSWORD_SCRYPT_P=5`, use Cloudflare Email Service for mail if you like ([step 10](#cloudflare-email-service)), and raise the import limits, `SPACE_DAILY_ROW_WRITES`, `SPACE_MAX_BYTES` and the quotas. An object can then hold 10 GB. Cloudflare's pricing pages have the current prices and included amounts.
+**Workers Paid** needs no code change: CPU time is 30 s a request by default (`"limits": { "cpu_ms": … }` in your instance configuration changes it), set `PASSWORD_SCRYPT_P=5`, use Cloudflare Email Service for mail if you like ([step 10](#cloudflare-email-service)), and raise the import limits, `SPACE_DAILY_ROW_WRITES`, `SPACE_MAX_BYTES` and the quotas. An object can then hold 10 GB. Cloudflare's pricing pages have the current prices and included amounts.
 
 ## CPU time and the password hash
 
@@ -468,7 +647,8 @@ The [README's security notes](../README.md#security-notes) apply here too. On Cl
 - **Sign-outs reach the spaces within `AUTH_CACHE_SECONDS`** (30 s): a sign-out, or one session ended in Account settings, can keep working against a space for that long. Password changes and resets, a disabled or deleted account, a removed member and a demotion are pushed to the spaces before the answer.
 - **One origin.** With `PUBLIC_URL` set, the API answers no other host (421), so a workers.dev address left on cannot be used to get around the zone's rules, and passkeys are never registered for an address that will not work. It answers no plain HTTP either (421, also without `PUBLIC_URL`, except on your own machine under `wrangler dev`), so a password or a session cookie never travels in clear, even on a zone without **Always Use HTTPS** (step 8 turns it on for the web app's files).
 - **HSTS**: every answer over HTTPS carries `Strict-Transport-Security: max-age=31536000` (without `includeSubDomains`: your other hosts are not ours to decide). The web app's files carry the same Content-Security-Policy as on Node (`web/public/_headers`).
-- **Secrets** are Worker secrets or the secrets of the fork's `cloudflare` environment (never repository secrets, which every workflow run can read: [step 4B](#4-deploy)), never files in the repository. The deploy script prints variables' names only, but GitHub prints each step's environment in the run's log, so repository variables appear there in clear, and a fork's logs are as public as the fork. Keep `RECOVERY_TOKEN` unset except while you need it, and `MAIL_LOG_BODIES` off.
+- **Secrets** are Worker secrets or the secrets of the fork's `cloudflare` environment (never repository secrets, which every workflow run can read: [step 4B](#4-deploy)), never files in the repository or the instance configuration, which names the secrets the Worker must have and never holds a value. The deploy scripts print settings' names only, never a value, but an instance configuration committed to a fork is as public as the fork: `SMTP_USER` and `MAIL_REPLY_TO` can be kept as secrets instead, and every other setting is in the file. Keep `RECOVERY_TOKEN` unset except while you need it, and `MAIL_LOG_BODIES` off.
+- **Next to the Cloudflare token.** The workflow's deploy job runs only Wrangler and the app's own configuration parser, which Wrangler's esbuild bundles from `server/src` and `shared/src` alone, and which is refused at run time if it ever imports a package (`scripts/lib/app-config.mjs`). The build, its plugins and the tests run in the other job, with no secret.
 - **Floods.** The app's limits keep anonymous requests from writing rows and count failed sign-ins per address, per network and instance-wide; only the zone's rate-limiting rule (step 9) stops a flood from many addresses before it uses up the day's requests, and then the instance is unavailable until 00:00 UTC, like any Free Worker.
 
 ## Local development
@@ -483,7 +663,7 @@ cp .dev.vars.example .dev.vars        # git-ignored; Wrangler reads it as the Wo
 npm run dev:cf                        # wrangler dev on http://localhost:8787
 ```
 
-Open the app at `http://localhost:8787` (the Worker answers only `PUBLIC_URL`'s origin, and plain HTTP only on this machine): `localhost` is a secure context, so passkeys work there. The setup code is printed in the terminal unless `.dev.vars` sets `SETUP_TOKEN`. On another port, run Wrangler yourself, `npx wrangler dev --ip 127.0.0.1 --port 8790`, with `PUBLIC_URL=http://localhost:8790`.
+`npm run dev:cf` runs `wrangler dev` with `wrangler.jsonc` and `.dev.vars` alone: it never reads your instance configuration, and local settings stay in `.dev.vars`. Open the app at `http://localhost:8787` (the Worker answers only `PUBLIC_URL`'s origin, and plain HTTP only on this machine): `localhost` is a secure context, so passkeys work there. The setup code is printed in the terminal unless `.dev.vars` sets `SETUP_TOKEN`. On another port, run Wrangler yourself, `npx wrangler dev --ip 127.0.0.1 --port 8790`, with `PUBLIC_URL=http://localhost:8790`.
 
 For work on the web client with hot reload, put Vite's address in `.dev.vars` instead, `PUBLIC_URL=http://localhost:5173` (or leave `PUBLIC_URL` out): Vite's proxy passes the browser's `Host` on, so every API request reaches the Worker as `localhost:5173`, and with `PUBLIC_URL=http://localhost:8787` each one would answer 421 and move the page to the Worker's own address. Then run `LYREN_API_URL=http://localhost:8787 npm run dev:web` next to `npm run dev:cf` and open `http://localhost:5173`.
 
@@ -496,14 +676,15 @@ Everything above was built and tested in Cloudflare's local runtime (workerd, th
 - [ ] **CPU time on the Free plan** (steps 5 and 11): whether Durable Objects get 10 ms; the real cost of a password sign-in (scrypt with `PASSWORD_SCRYPT_P=1`, or pbkdf2), first-run setup, a passkey verification, the dashboard, the all-tasks list, an export and an import of a large space; error 1102.
 - [ ] **The Worker's startup time** with the bundle of about 2.1 MB (410 KiB compressed), about 620 KiB of it the passkey library's certificate parsing (SimpleWebAuthn's x509 and asn1 code, which the app does not use but cannot leave out): it must start in under 1 s.
 - [ ] **Outbound TCP from Workers on the Free plan** (step 10): whether SMTP on ports 465 and 587 connects at all, and that port 25 is blocked as documented.
-- [ ] **Real mail**: a message through a real SMTP provider (TLS and STARTTLS, with the platform's certificate check), through Resend's API, and through Cloudflare's Email Service with a `send_email` binding on Workers Paid.
+- [ ] **Real mail**: a message through a real SMTP provider (TLS and STARTTLS, with the platform's certificate check), through Resend's API, and through Cloudflare's Email Service on Workers Paid, with the binding `EMAIL` that `MAIL_TRANSPORT=cloudflare` adds to a deploy (`"send_email": [{ "name": "EMAIL" }]`, unrestricted) and with one limited by `allowed_sender_addresses`.
 - [ ] **Mail sent after the answer**: messages are handed to the transport in the background of the directory object (`ctx.waitUntil`, after a 0 ms timer); that they complete in production, also when the object is otherwise idle.
 - [ ] **The daily-limit errors** (step 12): the exact text of a Durable Object's error once rows read or written are used up (the app expects "exceeded" with "free tier", "daily", "quota", "rows read" or "rows written"), Cloudflare's own 1027 answer (the app expects a page that names 1027), and the rate-limiting rule's 429 (error 1015).
-- [ ] **`wrangler deploy --secrets-file`**: that the workflow's first deployment has its secrets from the start, and that a later one keeps the secrets it does not list.
+- [ ] **`wrangler deploy --secrets-file`**: that the workflow's first deployment has its secrets from the start, and that a later one keeps the secrets it does not list. **`secrets.required`**: that a deploy is refused while the Worker lacks one, and that `npm run cf -- secret put` on a Worker that does not exist yet makes one that the first deploy replaces, Durable Objects and all.
 - [ ] **Data across deploys**: that a deployment, a rollback and a Deploy-button rebuild keep the Durable Objects' data (also on a workers.dev-only deployment), and that `keep_vars` keeps the dashboard's variables.
-- [ ] **The Deploy button**: the copy, Workers Builds with the legacy `migrations` form, the `SETUP_TOKEN` prompt from `.dev.vars.example`, and that the web client is built once (`WORKERS_CI=1`).
-- [ ] **The GitHub workflow in a fork**: actionlint (not run here), a dry run, then a deployment, with the secrets in the `cloudflare` environment (step 4B): that the deploy job gets them, waits for the required reviewer, and is refused from a branch other than `main`.
-- [ ] **Custom domains**: that a later deploy keeps a domain added in the dashboard, that `WORKERS_DEV=false` (or `"workers_dev": false`) sticks, and that with **Always Use HTTPS** off the API still answers plain HTTP with 421 (`request.url` keeps the browser's scheme).
+- [ ] **The Deploy button**: the copy, Workers Builds with the legacy `migrations` form, the `SETUP_TOKEN` prompt from `.dev.vars.example`, that the web client is built once (`WORKERS_CI=1`), and that the deploy command Cloudflare fills in is `npm run deploy` (`package.json`'s `deploy` script), with which the first build, without an instance configuration, deploys `wrangler.jsonc` as it is.
+- [ ] **The guard under Workers Builds**: that Wrangler hands `WRANGLER_COMMAND` to the build command there too, so that a copy with an instance configuration and the deploy command `npx wrangler deploy` is refused before anything is uploaded, while `npm run deploy` passes; and that a `name` other than the build's Worker is refused (`WRANGLER_CI_OVERRIDE_NAME`).
+- [ ] **The GitHub workflow in a fork**: actionlint (not run here), a dry run, then a deployment, with the secrets in the `cloudflare` environment (step 4B): that the deploy job gets them, waits for the required reviewer, and is refused from a branch other than the deployment branch (`master` here, or a `deploy` branch); that the check job's `--validate` and the dry run read the instance configuration committed to the fork, or the one the repository variable `LYREN_INSTANCE_FILE` names.
+- [ ] **Custom domains**: that a later deploy keeps a domain added in the dashboard, that `"workers_dev": false` sticks, that a domain in `routes` is attached by the first deploy (and one already attached in the dashboard is kept as it is), which token permissions that needs (a token from the **Edit Cloudflare Workers** template with the zone, and `npx wrangler login`'s), and that with **Always Use HTTPS** off the API still answers plain HTTP with 421 (`request.url` keeps the browser's scheme).
 - [ ] **The zone's rate-limiting rule** (step 9): that it blocks as configured, and that the app answers its own 429s as before.
 - [ ] **Passkeys on real devices**: Safari and iOS, which want the browser's passkey dialog to follow a click closely (the app asks the server for the ceremony first); password managers that offer passkeys in the sign-in field's suggestions; and the signals that tell them about removed passkeys (`signalUnknownCredential`, `signalAllAcceptedCredentials`).
 - [ ] **Smaller platform details**: the 2 MB limit on a row or string (the app keeps every row far below it), Cloudflare's compression of API answers, timers inside a Durable Object (the failure padding of sign-ins), the client address in `CF-Connecting-IP`, and that `ctx.id.name` may be missing (the app does not rely on it).

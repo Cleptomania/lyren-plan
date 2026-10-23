@@ -1,9 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Lyren Plan on Cloudflare: see docs/cloudflare.md. Nothing here belongs to one deployment. Change
-  // the Worker name with --name, and set per-deployer values as variables (dashboard, or --var at
-  // deploy time) and secrets (wrangler secret put). keep_vars stops a deploy from dropping
-  // variables set in the dashboard.
+  // Lyren Plan on Cloudflare: see docs/cloudflare.md. Nothing here belongs to one deployment, and no
+  // copy of this file is edited for one: the Worker's name, its custom domains, its variables and the
+  // secrets it needs are in each instance's own instance configuration (wrangler.instance.jsonc, or
+  // LYREN_INSTANCE_FILE; docs/cloudflare.md, "Your instance configuration"), which npm run deploy:cf
+  // lays over this file for each run. Secrets themselves are the Worker's (npm run cf -- secret put).
+  // keep_vars stops a deploy from dropping variables set in the dashboard.
   "name": "lyren-plan",
   "main": "server/src/runtime/cloudflare/worker.ts",
   "tsconfig": "./tsconfig.worker.json",
@@ -24,20 +26,21 @@
   },
   // Append-only. Never edit or remove a tag that has been deployed.
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DirectoryDO", "SpaceDO"] }],
-  // On for the first deployment. With a custom domain, turn it off (docs/cloudflare.md, "Hostnames").
+  // On for the first deployment. With a custom domain, the instance configuration turns it off
+  // ("workers_dev": false, or "routes"; docs/cloudflare.md, "Hostnames").
   "workers_dev": true,
   "preview_urls": false,
   "keep_vars": true,
   "observability": { "enabled": true },
   "upload_source_maps": true,
   "send_metrics": false
-  // Mail (docs/cloudflare.md, "Mail"): nothing is sent until MAIL_TRANSPORT is set. Variables (the
-  // dashboard, or --var): MAIL_TRANSPORT (smtp, resend or cloudflare), MAIL_FROM (e.g. plan@example.com),
-  // PUBLIC_URL (e.g. https://plan.example.com), MAIL_FROM_NAME, MAIL_REPLY_TO, MAIL_DAILY_CAP (90 with
-  // Resend's free plan), SMTP_HOST (e.g. smtp.example.com), SMTP_SECURITY (tls on 465, or starttls on 587;
-  // port 25 is blocked on Workers), SMTP_PORT, SMTP_USER and SMTP_EHLO_NAME. The secrets SMTP_PASS and
-  // RESEND_API_KEY are set with `npx wrangler secret put <NAME>`, never in this file. MAIL_TRANSPORT=cloudflare
-  // (Workers Paid) also needs the binding "send_email": [{ "name": "EMAIL" }], which is not here, so that this
-  // file suits the Free plan: each deploy adds it (EMAIL_BINDING, or your copy of this file with the Deploy
-  // button; docs/cloudflare.md, "Cloudflare Email Service").
+  // Mail (docs/cloudflare.md, "Mail"): nothing is sent until MAIL_TRANSPORT is set. Variables (in "vars"
+  // of the instance configuration): MAIL_TRANSPORT (smtp, resend or cloudflare), MAIL_FROM (e.g.
+  // plan@example.com), PUBLIC_URL (e.g. https://plan.example.com), MAIL_FROM_NAME, MAIL_REPLY_TO,
+  // MAIL_DAILY_CAP (90 with Resend's free plan), SMTP_HOST (e.g. smtp.example.com), SMTP_SECURITY (tls on
+  // 465, or starttls on 587; port 25 is blocked on Workers), SMTP_PORT, SMTP_USER and SMTP_EHLO_NAME. The
+  // secrets SMTP_PASS and RESEND_API_KEY are set with `npm run cf -- secret put <NAME>`, never in a file.
+  // MAIL_TRANSPORT=cloudflare (Workers Paid) also needs the binding "send_email": [{ "name": "EMAIL" }],
+  // which is not here, so that this file suits the Free plan: each run adds it when the instance
+  // configuration's MAIL_TRANSPORT is cloudflare (docs/cloudflare.md, "Cloudflare Email Service").
 }

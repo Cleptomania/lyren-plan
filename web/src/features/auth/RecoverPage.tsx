@@ -28,7 +28,7 @@ import { AuthLayout, FormAlert, FormNotice } from './AuthLayout';
 /** How the operator removes the token again, per runtime. */
 function removeTokenText(runtime: 'node' | 'cloudflare'): string {
   return runtime === 'cloudflare'
-    ? 'Once you are back in, delete the secret again: npx wrangler secret delete RECOVERY_TOKEN.'
+    ? 'Once you are back in, delete the secret again: npm run cf -- secret delete RECOVERY_TOKEN, or in the dashboard (Workers & Pages → your Worker → Settings → Variables and Secrets).'
     : 'Once you are back in, remove RECOVERY_TOKEN from the server’s environment and restart it.';
 }
 

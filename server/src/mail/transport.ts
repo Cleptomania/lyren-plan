@@ -44,7 +44,7 @@ export interface MailTransport {
 export interface MailRuntime {
   /** The SMTP connector (runtime/node/smtpConnector.ts, runtime/cloudflare/smtpConnector.ts). */
   smtp?: SmtpConnector;
-  /** Cloudflare: the send_email binding EMAIL, when the deployer added one (§10.6). */
+  /** Cloudflare: the send_email binding EMAIL, when the deploy added one (§10.6). */
   email?: EmailBinding;
   /** Default: the global fetch (Resend). */
   fetch?: typeof fetch;

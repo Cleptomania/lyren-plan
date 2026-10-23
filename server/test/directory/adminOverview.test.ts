@@ -85,7 +85,9 @@ describe('GET /api/admin/overview', () => {
       const { client } = await h.setup();
       expect((await client.get<AdminOverviewDTO>('/api/admin/overview')).body.warnings).toEqual([RECOVERY_TOKEN_WARNING[runtime], MAIL_LOG_BODIES_WARNING]);
     }
-    expect(RECOVERY_TOKEN_WARNING.cloudflare).toContain('npx wrangler secret delete RECOVERY_TOKEN');
+    // npm run cf acts on the instance configuration's Worker; a plain npx wrangler would act on wrangler.jsonc's.
+    expect(RECOVERY_TOKEN_WARNING.cloudflare).toContain('npm run cf -- secret delete RECOVERY_TOKEN');
+    expect(RECOVERY_TOKEN_WARNING.cloudflare).not.toContain('npx wrangler');
 
     // The policy was set to open while mail worked; this start has none.
     const withMail = createDirectoryHarness({ vars: PUBLIC });

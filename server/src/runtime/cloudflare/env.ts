@@ -1,5 +1,6 @@
 // The Worker's bindings and settings (wrangler.jsonc, design §10.8). Settings are Wrangler
-// variables (the dashboard, `--var`, `.dev.vars`) or secrets, always strings; an empty value counts
+// variables (`vars` of the instance configuration, which each deploy sends, and those set in the
+// dashboard; `.dev.vars` under npm run dev:cf) or secrets, always strings; an empty value counts
 // as unset, and unset ones take the Cloudflare defaults of Appendix B (config.ts reads them).
 
 import type { DirectoryDO } from './directoryDo';
@@ -12,7 +13,7 @@ export interface Env {
   DIRECTORY: DurableObjectNamespace<DirectoryDO>;
   /** One object per space, named by its space id. */
   SPACES: DurableObjectNamespace<SpaceDO>;
-  /** Cloudflare Email Service (Workers Paid); added by deployers who use MAIL_TRANSPORT=cloudflare. */
+  /** Cloudflare Email Service (Workers Paid); MAIL_TRANSPORT=cloudflare in the instance configuration adds it. */
   EMAIL?: SendEmail;
 
   // Secrets

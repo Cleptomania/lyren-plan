@@ -413,24 +413,24 @@ The maintenance commands run inside the container, as the user it runs as, for e
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Cleptomania/lyren-plan)
 
-Lyren Plan also runs on Cloudflare, within the Workers Free plan to start with, as long as the runbook's CPU checks pass (whether Free's 10 ms of CPU per request applies to Durable Objects is not settled, and larger spaces need more for some requests): a Worker serves the API, Durable Objects with SQLite hold the accounts and each space, and Workers Static Assets serve the web app. Nothing in this repository belongs to one deployment, so anyone can deploy their own copy, in one of three ways:
+Lyren Plan also runs on Cloudflare, within the Workers Free plan to start with, as long as the runbook's CPU checks pass (whether Free's 10 ms of CPU per request applies to Durable Objects is not settled, and larger spaces need more for some requests): a Worker serves the API, Durable Objects with SQLite hold the accounts and each space, and Workers Static Assets serve the web app. Nothing in this repository belongs to one deployment, so anyone can deploy their own copy. What belongs to yours (the Worker's name, a custom domain, the settings) is in one file of your own, the instance configuration (`wrangler.instance.jsonc`, copied from `wrangler.instance.example.jsonc`), which every deploy lays over the committed `wrangler.jsonc`; secrets stay the Worker's. Three ways to deploy:
 
-- **The button above**: Cloudflare copies this repository into your GitHub or GitLab account and builds and deploys it there. It asks for a setup code (`SETUP_TOKEN`); afterwards set `PUBLIC_URL` and the rest in the Worker's settings.
-- **The GitHub workflow** `.github/workflows/deploy-cloudflare.yml`, run by hand in your fork, with your Cloudflare token as a secret of the fork's `cloudflare` environment (with required reviewers; never a repository secret) and your settings as repository variables, whose values the run's log shows. It checks and builds in one job with no secret, and deploys from a second one; a dry run first changes nothing.
-- **From your computer**: `npx wrangler login`, then `npm run deploy:cf`.
+- **The button above**: Cloudflare copies this repository into your GitHub or GitLab account and builds and deploys it there. It asks for a setup code (`SETUP_TOKEN`); afterwards commit your instance configuration to the copy, and each push deploys it.
+- **The GitHub workflow** `.github/workflows/deploy-cloudflare.yml`, run by hand in your fork, with your instance configuration committed to the fork (to a branch of its own, such as `deploy`, if you also send pull requests from the fork) and your Cloudflare token as a secret of the fork's `cloudflare` environment (with required reviewers; never a repository secret). It checks and builds in one job with no secret, and deploys from a second one; a dry run first changes nothing.
+- **From your computer**: `cp wrangler.instance.example.jsonc wrangler.instance.jsonc` and edit it (git ignores it), `npx wrangler login`, then `npm run deploy:cf`.
 
-**[docs/cloudflare.md](docs/cloudflare.md)** is the runbook: the steps of a first deployment for each way (the setup code, the password hash's cost, a custom domain and the rate-limiting rule a public instance needs, mail), the configuration reference with Cloudflare's defaults, what the Free plan holds and what it costs, upgrades and rollbacks, backups by space archive, moving to a server of your own, and what to check once deployed. In short, on Cloudflare:
+**[docs/cloudflare.md](docs/cloudflare.md)** is the runbook: the instance configuration, the steps of a first deployment for each way (the setup code, the password hash's cost, a custom domain and the rate-limiting rule a public instance needs, mail), the configuration reference with Cloudflare's defaults, what the Free plan holds and what it costs, upgrades and rollbacks, backups by space archive, moving to a server of your own, and what to check once deployed. In short, on Cloudflare:
 
 - There is no command line and no backup download: owners download their spaces' archives, and the recovery token (`RECOVERY_TOKEN`) helps when no administrator can sign in ([Locked out](docs/cloudflare.md#locked-out)).
 - The defaults fit the Free plan: passwords of at least 12 characters, sessions of at most 90 days, 5 spaces per account, 20 members per space, imports of up to 4 MiB.
 - Mail goes through an SMTP provider (whether the Free plan allows the connection is only known once deployed), Resend, or Cloudflare's Email Service on Workers Paid.
-- `npm run dev:cf` runs it all locally with Wrangler, and `npm run check:cf` bundles the Worker as a deploy would, offline.
+- `npm run dev:cf` runs it all locally with Wrangler, and `npm run check:cf` checks your instance configuration and bundles the Worker as a deploy would, offline. A plain `npx wrangler deploy` is refused in a checkout with an instance configuration: `npm run deploy:cf` deploys it, and `npm run cf -- <command>` runs any other Wrangler command for your instance's Worker.
 
 ---
 
 ## Configuration
 
-All configuration is through environment variables. `node dist/server.mjs help` prints the same list. The [Windows app](#windows-app) reads the same variables but has its own defaults for `HOST`, `PORT`, `DATA_DIR` and `WEB_DIR`. On Cloudflare they are the Worker's variables and secrets, with defaults for the Free plan where noted: see [docs/cloudflare.md](docs/cloudflare.md#configuration). `SETUP_TOKEN`, `RECOVERY_TOKEN`, `SMTP_PASS` and `RESEND_API_KEY` are secrets: keep them out of files others can read (the [Ubuntu guide](docs/ubuntu-server.md#14-settings) uses a root-only `EnvironmentFile=`, Docker an `env_file`).
+All configuration is through environment variables. `node dist/server.mjs help` prints the same list. The [Windows app](#windows-app) reads the same variables but has its own defaults for `HOST`, `PORT`, `DATA_DIR` and `WEB_DIR`. On Cloudflare they are the Worker's variables, in your instance configuration's `vars`, and its secrets, with defaults for the Free plan where noted: see [docs/cloudflare.md](docs/cloudflare.md#configuration). `SETUP_TOKEN`, `RECOVERY_TOKEN`, `SMTP_PASS` and `RESEND_API_KEY` are secrets: keep them out of files others can read (the [Ubuntu guide](docs/ubuntu-server.md#14-settings) uses a root-only `EnvironmentFile=`, Docker an `env_file`).
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -695,7 +695,7 @@ Database migrations run automatically at startup. Before an existing database is
 
 Browsers pick up the new web app on their next page load. For an installed PWA, close and reopen it.
 
-The Windows app is updated by replacing the exe; see [Updating](#updating). On Cloudflare, deploy the new version as you deployed the first; see [Upgrades and rollbacks](docs/cloudflare.md#upgrades-and-rollbacks).
+The Windows app is updated by replacing the exe; see [Updating](#updating). On Cloudflare, from your computer: `git pull`, `npm ci`, `npm run deploy:cf`, with nothing to edit in your instance configuration (a fork or a button's copy: [Upgrades and rollbacks](docs/cloudflare.md#upgrades-and-rollbacks)).
 
 ---
 
@@ -798,8 +798,10 @@ On Windows (Command Prompt or PowerShell, Node 24), `npm run dev`, `npm test`, `
 | `npm run test:watch` | Vitest in watch mode |
 | `npm run check` | typecheck + test + build |
 | `npm run dev:cf` | The Cloudflare Worker with Wrangler on `http://localhost:8787`, offline (see [docs/cloudflare.md](docs/cloudflare.md#local-development)) |
-| `npm run check:cf` | `wrangler deploy --dry-run`: bundles the Worker as a deploy would, offline, into `dist/worker`, and prints its size |
-| `npm run deploy:cf` | `wrangler deploy` to your Cloudflare account (after `npx wrangler login`) |
+| `npm run check:cf` | Checks your instance configuration, then `wrangler deploy --dry-run` with it: bundles the Worker as a deploy would, offline, into `dist/worker`, and prints its size |
+| `npm run deploy:cf` | Checks your instance configuration, then `wrangler deploy` with it to your Cloudflare account (after `npx wrangler login`; see [docs/cloudflare.md](docs/cloudflare.md#your-instance-configuration)) |
+| `npm run deploy` | The same, for the deploy command that the Deploy to Cloudflare button fills in |
+| `npm run cf -- <command>` | Any other Wrangler command for your instance's Worker (`secret put <NAME>`, `tail`, `rollback`, …); `npm run cf -- --validate` checks the instance configuration only |
 | `npm run package:win` | The single-file Windows app → `dist/lyren-plan-<version>-win-x64.exe` (see [Building the app](#building-the-app)) |
 | `npm run package:linux` | The same single-file app for Linux x64 → `dist/lyren-plan-<version>-linux-x64` |
 | `npm run package:node` | The archive for Node.js installs → `dist/lyren-plan-<version>-node.tar.gz` and its `.sha256` (see [Releases](#releases); `-- --no-build` packs the existing `dist/`) |
@@ -841,7 +843,7 @@ Pushing the tag starts the workflow, which has five jobs:
 - **If a job fails**, fix the cause and use **Re-run failed jobs** on the run's page within 7 days (3 for a dry run), while the run's binaries are kept. Publishing never changes a release that is already published: a draft left by a cancelled run is deleted and the release created again; a published release with exactly these files counts as done; one with other files (for example after **Re-run all jobs**, which builds new binaries) stops the job with an error. To replace a published release, delete it on GitHub, keep the tag, and run the job again; or release a new version. If the repository has immutable releases turned on, only a new version works: GitHub never lets the tag of a deleted immutable release be used again. If the build itself was wrong, fix it and release a new version: a tag that has been published should not be moved.
 - **Not signed.** The workflow does not sign the exe, so Windows may warn about it or block it (see [Getting it](#getting-it)). [Signing the app](#signing-the-app) describes how to sign a build yourself.
 - **Permissions.** The workflow's token can only read the repository, except in the publishing job, which asks for write access (`contents: write`) to create the release. That works whatever **Settings → Actions → General → Workflow permissions** says, because that setting is only the default for workflows that don't ask. Should publishing still fail with "Resource not accessible by integration" (HTTP 403), select **Read and write permissions** there, and for a repository owned by an organisation check the organisation's Actions settings too.
-- **Supply chain.** Both workflows use only GitHub's own actions (`checkout`, `setup-node`, `upload-artifact`, `download-artifact`), each pinned to the commit of a release (the version is in a comment next to it), and no caches. The Cloudflare workflow runs the build and the tests in a job without any secret, and deploys from another job, which runs nothing but Wrangler next to the Cloudflare token. The Ubuntu 26.04 smoke test installs `nodejs` from Ubuntu's archive with apt. (`.github/actionlint.yaml` only tells actionlint 1.7.12, which predates it, that `ubuntu-26.04` is a GitHub runner.) Text that others can choose, such as the tag name, reaches the scripts as environment variables only.
+- **Supply chain.** Both workflows use only GitHub's own actions (`checkout`, `setup-node`, `upload-artifact`, `download-artifact`), each pinned to the commit of a release (the version is in a comment next to it), and no caches. The Cloudflare workflow runs the build and the tests in a job without any secret, and deploys from another job, which runs nothing next to the Cloudflare token but Wrangler and the app's own configuration parser (bundled by Wrangler's esbuild, and refused if it imports a package). The Ubuntu 26.04 smoke test installs `nodejs` from Ubuntu's archive with apt. (`.github/actionlint.yaml` only tells actionlint 1.7.12, which predates it, that `ubuntu-26.04` is a GitHub runner.) Text that others can choose, such as the tag name, reaches the scripts as environment variables only.
 
 ### Project layout
 
@@ -895,11 +897,13 @@ web/
 scripts/               Dev runner, server bundler (esbuild), icon generator, package.mjs (the single-file app),
                        pack-node.mjs (the archive for Node.js installs); their helpers in scripts/lib, their
                        tests in scripts/test; ci/ has the release workflow's smoke tests (Windows exe,
-                       Node.js archive) and publishing script, and the Cloudflare deploy scripts; cf/ the web
-                       build Wrangler runs
+                       Node.js archive) and publishing script, and the script that writes the deploy workflow's
+                       secrets file; cf/ the Cloudflare scripts: wrangler.mjs runs Wrangler with the instance
+                       configuration, and build-web.mjs is the web build Wrangler runs
 .github/workflows/     release.yml: builds, tests and publishes releases (see Releases); deploy-cloudflare.yml:
                        deploys to Cloudflare by hand
-wrangler.jsonc         The Cloudflare Worker's configuration (nothing of one deployment in it); .dev.vars.example
+wrangler.jsonc         The Cloudflare Worker's configuration (nothing of one deployment in it);
+                       wrangler.instance.example.jsonc, the instance configuration to copy; .dev.vars.example
 docs/ubuntu-server.md  Installing on Ubuntu Server 26.04 as a systemd service, on Ubuntu's Node.js
 docs/cloudflare.md     Deploying to Cloudflare: runbook, configuration, costs
 docs/design/           The design of spaces, accounts and the Cloudflare runtime

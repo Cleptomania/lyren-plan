@@ -40,7 +40,7 @@ export const RECENT_ADMIN_EVENTS = 20;
 export const RECOVERY_TOKEN_WARNING = {
   node: 'RECOVERY_TOKEN is set: whoever knows it can get a sign-in link for any account. Remove it from the server’s configuration once you no longer need it, then restart Lyren Plan.',
   cloudflare:
-    'RECOVERY_TOKEN is set: whoever knows it can get a sign-in link for any account. Remove it once you no longer need it (npx wrangler secret delete RECOVERY_TOKEN).',
+    'RECOVERY_TOKEN is set: whoever knows it can get a sign-in link for any account. Remove it once you no longer need it: npm run cf -- secret delete RECOVERY_TOKEN, or delete it in the dashboard (Workers & Pages → your Worker → Settings → Variables and Secrets).',
 } as const;
 export const OPEN_WITHOUT_MAIL_WARNING =
   'Sign-up is open, but this instance sends no mail (MAIL_TRANSPORT=log), so nobody can confirm an address to sign up. Configure mail, or choose another sign-up policy in Settings.';

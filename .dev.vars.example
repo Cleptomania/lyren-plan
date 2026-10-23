@@ -1,5 +1,6 @@
-# Copy this file to .dev.vars for `npm run dev:cf` (.dev.vars is git-ignored). On Cloudflare, set secrets
-# with `npx wrangler secret put <NAME>` or in the dashboard. Every other setting: docs/cloudflare.md.
+# Copy this file to .dev.vars for `npm run dev:cf` (.dev.vars is git-ignored; dev:cf never reads your
+# instance configuration). On Cloudflare, settings go in "vars" of your instance configuration and secrets
+# on the Worker, with `npm run cf -- secret put <NAME>` or in the dashboard: docs/cloudflare.md.
 
 # First-run setup code: whoever knows it can create the first (admin) account. Choose a long random
 # value. Leave it empty to have a code generated and written to the Worker's logs.
@@ -13,7 +14,7 @@ SETUP_TOKEN=
 # MAIL_LOG_BODIES=1
 
 # Mail (docs/cloudflare.md, "Mail"). Without MAIL_TRANSPORT nothing is sent: each message is a line in
-# the logs. On Cloudflare, set SMTP_PASS and RESEND_API_KEY with `npx wrangler secret put <NAME>`.
+# the logs. On Cloudflare, set SMTP_PASS and RESEND_API_KEY with `npm run cf -- secret put <NAME>`.
 # MAIL_TRANSPORT=smtp
 # MAIL_FROM=plan@example.com
 # PUBLIC_URL=https://plan.example.com

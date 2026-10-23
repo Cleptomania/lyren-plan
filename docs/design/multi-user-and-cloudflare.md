@@ -7080,3 +7080,114 @@ Clarifications added after the lead's end-to-end review. Where they touch a sect
    exits 0; the follow-up question (default yes) would write the remote values into the configuration file, the
    committed `wrangler.jsonc` for a plain deploy. The runbook's step 8 says so; the deploy script's workers.dev
    line now names `WORKERS_DEV=false`. Not settled from the code: which dashboard actions set "dash".
+70. **One instance configuration** (after P8; §10.8, §10.10-§10.12, Appendix B; supersedes the deploy mechanisms of
+   item 63 and of decision 34 as item 68 built it; amends decision 32 (§16), §10.11 and items 48, 66 and 69).
+   Everything that belongs to one deployment is in one JSONC file of its own: a partial Wrangler configuration in
+   Wrangler's own keys (`name`, `account_id`, `workers_dev`, `routes`, `send_email`, `vars`, `secrets.required`,
+   `keep_vars`, `limits`, `observability`, `placement`, `logpush`, `tail_consumers`), never a secret's value. It is
+   `wrangler.instance.jsonc` in the checkout (git-ignored), or any file named by `LYREN_INSTANCE_FILE` or
+   `--instance` (the first given wins, and the output names it), or a file committed to a fork or a button's copy,
+   which this repository never has. `scripts/cf/wrangler.mjs` (`npm run check:cf`, `deploy:cf`, `deploy`, `cf`)
+   checks it and lays it over the current `wrangler.jsonc` for every Wrangler run; `wrangler.instance.example.jsonc`
+   is committed, placeholders only, and passes every check. docs/cloudflare.md, "Your instance configuration", is
+   the user's side.
+   - **What it supersedes.** The Worker's name: `--name` and `WORKER_NAME` give way to a required `"name"` (§10.8,
+     Appendix B). workers.dev: the three ways to turn it off (`WORKERS_DEV=false`, a `wrangler.local.jsonc`, the
+     copy's own `wrangler.jsonc`; §10.10, §10.11, item 63) give way to `"workers_dev"`, derived `false` when `routes`
+     is listed; the committed `true` stays, and so does the rule that a public instance turns it off (§13.10). The
+     `EMAIL` binding: `EMAIL_BINDING`, `wrangler-config.mjs --email-binding` and the copy's edits (item 68) give way
+     to one derivation, `send_email: [{ name: 'EMAIL' }]` whenever the file's `MAIL_TRANSPORT` is `cloudflare`, or the
+     file's own `send_email` (that one binding, limited at most to senders that include `MAIL_FROM`); the committed
+     file still has none (decision 34). The generated configuration: `scripts/ci/deploy-cloudflare.sh`,
+     `scripts/ci/wrangler-config.mjs`, `deployConfig`, `scripts/cf/clean-tmp.mjs` and `DRY_RUN` are deleted; the
+     generated configuration is still written next to `wrangler.jsonc` (relative paths resolve as there), now as
+     `wrangler.deploy.<id>.jsonc`, one file per run (`<id>` 8 random hex digits, so that a `tail` left running and a
+     deploy from another terminal never share one), from the current `wrangler.jsonc` on every run, with `wx`, and
+     removed in `finally`, so a new compatibility date or migration reaches every instance at its next deploy and
+     nothing goes stale. Its header records the wrapper's pid, its place (the host's name and, on Linux, the pid
+     namespace) and its kind: a later run of the same place removes a file whose pid is gone (a run that was stopped)
+     and leaves the others alone, those of another place (a container, another WSL distribution, whose pids mean
+     nothing here) among them. Since every build empties `dist/web`, which a deploy's Wrangler then uploads, a run of
+     kind `build` (`deploy` and `versions upload`, dry runs included) is refused while another such run's file is
+     there that is not a stopped run's (one message, which also says to remove the file if no run is going on: a pid
+     can be reused, and one of another place cannot be judged); a `tail` or a `secret` command never waits. It keeps
+     a habit from breaking a deploy and is no lock: two runs started at the same moment can both get past it. The
+     variables: the workflow's 36 repository variables (§10.10, item 63) give way to the file's `vars`; the workflow
+     reads only `vars.LYREN_INSTANCE_FILE`. The list moved to `scripts/lib/instance.mjs` (`APP_VARIABLES`) with its
+     parity test against `config.ts`, and `MAIL_LOG_BODIES` stays out (the file refuses it).
+   - **What it revisits.** Decision 32: the committed file still has no `vars`, and `keep_vars` stays true (a
+     variable set in the dashboard that the file does not list stays; `"keep_vars": false` is the instance's
+     choice), but the names an instance lists now come from its own file at every deploy and win over the
+     dashboard. They also go as `--var`, so that Wrangler's bindings table prints `(hidden)`, and stay in the
+     generated file, so that its dashboard diff (item 69) compares a whole configuration. Custom domains (§10.11):
+     still added in the dashboard if the instance likes, and a deploy without `routes` leaves them alone (item 69);
+     `routes` may now list them, custom domains only and `PUBLIC_URL`'s host among them, so a new public instance
+     needs one deploy instead of the runbook's two passes (the token then needs the zone). Running Wrangler (item
+     63's `npx --no -- wrangler`): the wrapper checks that `node_modules/wrangler` is the version `package.json` pins
+     and spawns its `bin/wrangler.js` with `process.execPath` and no shell, the same guarantee (never a downloaded
+     Wrangler) without the `.cmd` shim that Node refuses to spawn without a shell on Windows. The Deploy button
+     (§10.10, items 48 and 63): `package.json` has a `deploy` script, which Cloudflare fills in as the deploy
+     command; without an instance configuration it deploys `wrangler.jsonc` as before (`WORKERS_CI=1`, the first
+     build), and a copy then commits `wrangler.instance.jsonc` instead of editing `wrangler.jsonc`, so pulling this
+     repository's changes no longer conflicts. A `wrangler.jsonc` that carries an instance's setting is refused.
+   - **The guard.** `build.command` (`scripts/cf/build-web.mjs`) runs inside every `wrangler deploy`, before Wrangler
+     reads the Worker's state, and Wrangler 4.147.0 hands it `WRANGLER_COMMAND` (`deploy` for deploy and preview,
+     `versions upload`, `dev`, `types`). With an instance configuration in the checkout (the root file, or
+     `LYREN_INSTANCE_FILE`) it refuses a deploy or upload whose `--run=<token>` is not the wrapper's
+     `LYREN_WRANGLER_RUN`, a token of 128 random bits for one run, so a plain `npx wrangler deploy` can neither deploy
+     the bare base nor let the dashboard diff's write-back reach the tracked `wrangler.jsonc`: that write-back now
+     lands in the generated file, and the wrapper says so. An unset `WRANGLER_COMMAND` passes (a later Wrangler
+     cannot break `dev:cf`); `scripts/test/wrangler-config.test.mjs` runs the pinned Wrangler offline, so a change
+     shows at the bump.
+   - **The app's own check** (a behaviour-neutral app change). `normalizeEmail` moved into the zod-free
+     `shared/src/emailAddress.ts`, which `shared/src/email.ts` re-exports, so `core/config.ts` reaches no package.
+     `scripts/lib/app-config.mjs` bundles `parseAppConfig` in memory with Wrangler's esbuild and refuses it at run
+     time unless it comes from `server/src` and `shared/src` alone and imports nothing, so the deploy job runs it next
+     to the token with no third-party code but Wrangler's. Every run checks the file's variables with the parser the
+     Worker runs (an invalid value stops the deploy instead of a 503 afterwards), and those alone: not the ones the
+     Worker keeps from the dashboard, and no secret's value (the names in `secrets.required` and in a deploy's
+     `--secrets-file` count as set). So a setting that the file's variables depend on goes in the file too
+     (`MAIL_FROM` and `PUBLIC_URL` with `MAIL_TRANSPORT`, `PUBLIC_URL` with `WEBAUTHN_RP_ID`), of the settings only
+     `SMTP_USER` and `MAIL_REPLY_TO` may be kept as secrets, and the run says `the file's variables are valid` and
+     names, in a refusal, the setting to put in the file. It derives the secrets the settings require into
+     `secrets.required` (`SMTP_PASS` with `SMTP_USER`, `RESEND_API_KEY` with `resend`; never `SETUP_TOKEN` or
+     `RECOVERY_TOKEN`), which Wrangler then enforces, notes the variables it does not read, and prints `<value>` in
+     place of values. The `EMAIL` rule stays in the generator and in `mail/cloudflare.ts`: a binding is not a
+     variable.
+   - **What stays.** Nothing of one deployment in the repository (§13.13). Secrets are the Worker's or the GitHub
+     `cloudflare` environment's (item 66), never in the file, which only names the ones the Worker must have. The
+     workflow's two jobs, manual dispatch, dry run by default, pinned `actions/*`, `--ignore-scripts`, no `${{ }}`
+     in a `run:` and the always-run removal of the secrets file (item 63); the check job now also validates the file
+     with no secret, and the dry run gets no token. `--secrets-file` (now with `SMTP_USER` and `MAIL_REPLY_TO` too,
+     which an instance may keep as secrets). `RECOVERY_TOKEN` and `MAIL_LOG_BODIES` are never pushed by a deploy
+     (§5.8.19). `WORKERS_CI` reuses the built client (item 63). `npm run dev:cf` reads `wrangler.jsonc` and
+     `.dev.vars` and never the instance configuration. Output names settings, never values.
+   - **The workflow's deployment branch** (amends item 66): the environment's rule is the branch that holds the
+     instance configuration: the fork's default branch (`master` for this repository, where `main` would have refused
+     every run), or, in a fork that also sends pull requests, a branch of its own such as `deploy`, so that pull
+     requests never carry the file. This repository has no instance configuration and never deploys through the
+     workflow; its check job's `--validate` fails without one, before any approval.
+   - **Arguments and environment.** The wrapper refuses what would point Wrangler at another configuration or Worker:
+     a `--` (Wrangler ignores the run's `--config` and `--var` after it), `--env-file`, and a non-blank
+     `CLOUDFLARE_ENV`. Every Wrangler run gets `--env=` (Wrangler's top-level environment) besides an empty
+     `CLOUDFLARE_ENV`: Wrangler loads the checkout's `.env` and `.env.local` into its environment, where a
+     `CLOUDFLARE_ENV` set there wins over the empty one, but not over the argument. It refuses a wrapper option that
+     npm took for itself when the `--` was left out (`npm_config_instance`, `npm_config_secrets_file`,
+     `npm_config_validate`; `npm_config_dry_run` for a real deploy), naming the script that was run
+     (`npm_lifecycle_event`) in the command to give instead. It refuses `triggers deploy`, which would apply routes
+     and workers.dev from a file that only got warnings, and `types`, which needs `wrangler.jsonc` alone. Commands
+     other than a deploy or an upload take only `name` and `account_id` from the file, so a flaw elsewhere cannot stop
+     a `tail` or a `rollback`; they stop when either fails its check, since both pick the Worker the command acts on
+     (an `account_id` left out for not being `CLOUDFLARE_ACCOUNT_ID` would let Wrangler act on a Worker of that name
+     in that other account). A member name given twice, a file in UTF-16 or UTF-32 and the values only `wrangler dev`
+     uses (a loopback `PUBLIC_URL` or `SMTP_HOST`, `SMTP_SECURITY=none`) are refused, a custom-domain `PUBLIC_URL`
+     that leaves workers.dev on is a warning, and the wrapper's own lines go to stderr, so that stdout is Wrangler's.
+   - **Not built.** A live read of the Worker before a deploy (a binding the deploy would drop, a variable that is a
+     secret there, a missing Worker): nothing offline could verify it, so the wrapper prints static notes instead
+     (no `MAIL_TRANSPORT` in the file while `keep_vars` is true; a leftover `wrangler.local.jsonc` or
+     `.wrangler/deploy/config.json`). Also left out: importing a deployed Worker's settings, prompts for secrets
+     (Wrangler's `secret put` prompts), the file's text in a variable, and Wrangler's redirect file
+     `.wrangler/deploy/config.json` (its write-back targets `wrangler.jsonc`, and `secret` and `tail` ignore it).
+   - **Not verified here** (no account; docs/cloudflare.md, "What only production can show"): that the button fills
+     in `npm run deploy`; the guard under Workers Builds; the token permissions `routes` needs; the derived `EMAIL`
+     binding on Workers Paid; `secrets.required` on a first deploy.

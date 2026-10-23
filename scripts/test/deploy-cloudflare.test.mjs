@@ -1,8 +1,9 @@
-// The Cloudflare deploy workflow (.github/workflows/deploy-cloudflare.yml, design §10.10) and its scripts,
-// scripts/ci/write-secrets-file.sh and scripts/ci/deploy-cloudflare.sh. The scripts run in a copy of what they
-// use, against a fake npx on PATH that records the arguments and environment Wrangler would get. actionlint
-// and shellcheck are not part of npm run check: the workflow is read by scripts/test/support/workflow-yaml.mjs
-// and checked against release.yml's patterns.
+// The Cloudflare deploy workflow (.github/workflows/deploy-cloudflare.yml, design §10.10, Appendix D 70) and
+// scripts/ci/write-secrets-file.sh, which writes its secrets file. The workflow checks and deploys through
+// scripts/cf/wrangler.mjs (scripts/test/cf-wrangler.test.mjs), with the instance configuration the repository
+// holds or names (LYREN_INSTANCE_FILE) and no other repository variable. The script runs in a copy, with only
+// the environment it is given. actionlint and shellcheck are not part of npm run check: the workflow is read by
+// scripts/test/support/workflow-yaml.mjs and checked against release.yml's patterns.
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -10,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { parseJsonc } from '../lib/cloudflare.mjs';
+import { SECRET_NAMES } from '../lib/instance.mjs';
 import { parseWorkflowYaml } from './support/workflow-yaml.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -23,55 +24,8 @@ function tmp() {
   return d;
 }
 
-/** The bash array `name=( … )` of a script, as a list of words. */
-function bashArray(script, name) {
-  const m = new RegExp(`^${name}=\\(([^)]*)\\)`, 'm').exec(script);
-  if (!m) throw new Error(`No ${name}=( … ) in the script`);
-  return m[1].split(/\s+/).filter(Boolean);
-}
-
-const DEPLOY_SCRIPT = read('scripts/ci/deploy-cloudflare.sh');
-const VARIABLES = bashArray(DEPLOY_SCRIPT, 'VARIABLES');
-const SECRETS = ['SETUP_TOKEN', 'SMTP_PASS', 'RESEND_API_KEY'];
-
 /** A value that a shell would turn into something else anywhere but in a variable or an argument. */
 const ODD = `He said "hi" $(touch pwned) \`touch pwned2\` 'x' \\ $HOME ;|& *\nsecond line  `;
-
-// ---------------------------------------------------------------------------
-// The variable list
-// ---------------------------------------------------------------------------
-
-describe('the variables a deploy passes', () => {
-  // Every variable core/config.ts reads: readText(vars, 'X'), readInt(vars, 'X', …), limit('X', …), …
-  const read_ = [...read('server/src/core/config.ts').matchAll(/\b(?:read\w+\(vars, |limit\()'([A-Z][A-Z0-9_]*)'/g)].map((m) => m[1]);
-  const all = new Set(read_);
-  // Read on Node only (Appendix B: n/a on Cloudflare).
-  const NODE_ONLY = ['SNAPSHOT_KEEP'];
-  // Secrets: three through the secrets file, RECOVERY_TOKEN never (§5.8.19).
-  const SECRET_NAMES = [...SECRETS, 'RECOVERY_TOKEN'];
-  // Development only (§5.10.2): never passed by a deploy.
-  const LEFT_OUT = ['MAIL_LOG_BODIES'];
-
-  it('are every variable the app reads on Cloudflare but the secrets and MAIL_LOG_BODIES', () => {
-    for (const name of [...NODE_ONLY, ...SECRET_NAMES, ...LEFT_OUT]) expect(all, name).toContain(name);
-    const expected = [...all].filter((n) => ![...NODE_ONLY, ...SECRET_NAMES, ...LEFT_OUT].includes(n)).sort();
-    expect([...VARIABLES].sort()).toEqual(expected);
-    expect(new Set(VARIABLES).size).toBe(VARIABLES.length);
-    // The ones the task names, so a broken pattern cannot pass with an empty list.
-    for (const name of ['PUBLIC_URL', 'WEBAUTHN_RP_ID', 'MAIL_TRANSPORT', 'MAIL_FROM', 'SMTP_HOST', 'SMTP_SECURITY', 'AUTH_CACHE_SECONDS']) {
-      expect(VARIABLES).toContain(name);
-    }
-  });
-
-  it('fit in a Worker together with the secrets (64 variables at most, §11.1)', () => {
-    expect(VARIABLES.length + SECRET_NAMES.length).toBeLessThanOrEqual(64);
-  });
-
-  it('are the secrets write-secrets-file.sh writes and the deploy script accepts', () => {
-    expect(bashArray(DEPLOY_SCRIPT, 'SECRETS')).toEqual(SECRETS);
-    expect(read('scripts/ci/write-secrets-file.sh')).toContain(`"$1" ${SECRETS.join(' ')}\n`);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // The workflow
@@ -148,27 +102,36 @@ describe('the deploy workflow', () => {
     for (const s of runs) expect(s.run, s.name).not.toContain('${{');
   });
 
-  it('gives no secret to the check job, which hands on only the built web client', () => {
+  it('gives no secret to the check job, which checks the instance configuration and hands on only the built web client', () => {
     expect(JSON.stringify(wf.jobs.check)).not.toMatch(/secrets\.|github\.token/);
     expect(steps('check').map((s) => s.run ?? s.uses.split('@')[0])).toEqual([
       'actions/checkout',
       'actions/setup-node',
       'npm ci --ignore-scripts --no-audit --no-fund',
+      'node scripts/cf/wrangler.mjs --validate',
       'npm run check',
       'actions/upload-artifact',
     ]);
+    // A bad instance configuration stops the run before anybody approves the deploy job.
+    const validate = step('check', 'Check the instance configuration (no secrets in this job)');
+    expect(validate).toEqual({
+      name: 'Check the instance configuration (no secrets in this job)',
+      env: { LYREN_INSTANCE_FILE: '${{ vars.LYREN_INSTANCE_FILE }}' },
+      run: 'node scripts/cf/wrangler.mjs --validate',
+    });
     expect(step('check', 'Keep the web client').with).toEqual({ name: 'web', path: 'dist/web', 'if-no-files-found': 'error', 'retention-days': '1' });
     expect(step('deploy', 'Download the web client').with).toEqual({ name: 'web', path: 'dist/web' });
   });
 
-  it('runs nothing in the deploy job but the install, the two scripts and the removal of the secrets file', () => {
+  it('runs nothing in the deploy job but the install, the secrets file, the wrapper and the removal of the secrets file', () => {
     expect(steps('deploy').map((s) => s.run ?? s.uses.split('@')[0])).toEqual([
       'actions/checkout',
       'actions/setup-node',
       'npm ci --ignore-scripts --no-audit --no-fund',
       'actions/download-artifact',
       `bash scripts/ci/write-secrets-file.sh ${SECRETS_FILE_SHELL}`,
-      'bash scripts/ci/deploy-cloudflare.sh',
+      'node scripts/cf/wrangler.mjs deploy --dry-run --outdir dist/worker',
+      `node scripts/cf/wrangler.mjs deploy --secrets-file=${SECRETS_FILE_SHELL}`,
       `rm -f ${SECRETS_FILE_SHELL}`,
     ]);
   });
@@ -176,31 +139,45 @@ describe('the deploy workflow', () => {
   it('gives the app secrets to the secrets-file step alone, and only for a deploy', () => {
     const write = step('deploy', 'Write the app secrets to a private file');
     expect(write.if).toBe('${{ !inputs.dry_run }}');
-    expect(write.env).toEqual(Object.fromEntries(SECRETS.map((n) => [n, `\${{ secrets.${n} }}`])));
+    expect(write.env).toEqual(Object.fromEntries(SECRET_NAMES.map((n) => [n, `\${{ secrets.${n} }}`])));
     // Every secret the workflow names is in one of the two steps.
     const named = (s) => [...JSON.stringify(s).matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]);
-    const deploy = step('deploy', deployName);
+    const deploy = step('deploy', 'Deploy');
     expect(allSteps.filter((s) => named(s).length > 0)).toEqual([write, deploy]);
     expect(named(deploy).sort()).toEqual(['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN']);
-    expect(JSON.stringify(wf.jobs)).not.toContain('RECOVERY_TOKEN');
+    // RECOVERY_TOKEN is set by hand only while it is needed; MAIL_LOG_BODIES is for development only.
+    for (const name of ['RECOVERY_TOKEN', 'MAIL_LOG_BODIES']) expect(JSON.stringify(wf), name).not.toContain(name);
   });
 
-  it('deploys with the Cloudflare token (none for a dry run), the prebuilt client and every variable from the repository variables', () => {
-    const deploy = step('deploy', deployName);
-    expect(deploy.run).toBe('bash scripts/ci/deploy-cloudflare.sh');
-    expect(deploy.env).toEqual({
-      CLOUDFLARE_API_TOKEN: "${{ !inputs.dry_run && secrets.CLOUDFLARE_API_TOKEN || '' }}",
-      CLOUDFLARE_ACCOUNT_ID: "${{ !inputs.dry_run && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}",
-      LYREN_PREBUILT: '1',
-      DRY_RUN: '${{ inputs.dry_run }}',
-      SECRETS_FILE: '${{ runner.temp }}/lyren-secrets.json',
-      WORKER_NAME: '${{ vars.WORKER_NAME }}',
-      WORKERS_DEV: '${{ vars.WORKERS_DEV }}',
-      EMAIL_BINDING: '${{ vars.EMAIL_BINDING }}',
-      ...Object.fromEntries(VARIABLES.map((n) => [n, `\${{ vars.${n} }}`])),
+  it('a dry run: the wrapper with the prebuilt client and the instance configuration, and no token at all', () => {
+    const dry = step('deploy', 'Dry run');
+    expect(dry).toEqual({
+      name: 'Dry run',
+      if: '${{ inputs.dry_run }}',
+      env: { LYREN_PREBUILT: '1', LYREN_INSTANCE_FILE: '${{ vars.LYREN_INSTANCE_FILE }}' },
+      run: 'node scripts/cf/wrangler.mjs deploy --dry-run --outdir dist/worker',
     });
-    // The same order as the script's list, so the two read side by side.
-    expect(Object.keys(deploy.env).slice(8)).toEqual(VARIABLES);
+    expect(JSON.stringify(dry)).not.toContain('secrets.');
+  });
+
+  it('a deploy: the wrapper with the Cloudflare token, the prebuilt client, the instance configuration and the secrets file', () => {
+    expect(step('deploy', 'Deploy')).toEqual({
+      name: 'Deploy',
+      if: '${{ !inputs.dry_run }}',
+      env: {
+        CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
+        CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}',
+        LYREN_PREBUILT: '1',
+        LYREN_INSTANCE_FILE: '${{ vars.LYREN_INSTANCE_FILE }}',
+      },
+      run: `node scripts/cf/wrangler.mjs deploy --secrets-file=${SECRETS_FILE_SHELL}`,
+    });
+  });
+
+  it("reads no repository variable but LYREN_INSTANCE_FILE: the deployment's settings are its instance configuration", () => {
+    const code = text.replace(/^\s*#.*$/gm, '');
+    const variables = [...code.matchAll(/\bvars\.[\w-]+/g)].map((m) => m[0]);
+    expect(variables).toEqual(['vars.LYREN_INSTANCE_FILE', 'vars.LYREN_INSTANCE_FILE', 'vars.LYREN_INSTANCE_FILE']);
   });
 
   it('removes the secrets file whatever happened', () => {
@@ -230,71 +207,30 @@ describe('the workflow reader', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The scripts
+// The secrets file
 // ---------------------------------------------------------------------------
 
-/** npx as the scripts call it: records its arguments, its folder and environment, and the two files Wrangler would read. */
-const FAKE_NPX = `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-const option = (name) => args.find((a) => a.startsWith(name + '='))?.slice(name.length + 1) ?? null;
-const readIf = (file) => (file === null ? null : fs.readFileSync(file, 'utf8'));
-fs.appendFileSync(process.env.FAKE_NPX_LOG, JSON.stringify({
-  args,
-  cwd: process.cwd(),
-  env: process.env,
-  config: readIf(option('--config')),
-  secretsFile: readIf(option('--secrets-file')),
-}) + '\\n');
-console.log('wrangler (fake): done');
-process.exit(Number(process.env.FAKE_NPX_EXIT ?? 0));
-`;
-
-/** A copy of what the scripts use, a built web client and the fake npx. */
-function checkout({ web = true } = {}) {
+/** A copy of scripts/ci/write-secrets-file.sh, and a folder to run it from. */
+function checkout() {
   const dir = tmp();
-  for (const file of [
-    'scripts/ci/deploy-cloudflare.sh',
-    'scripts/ci/write-secrets-file.sh',
-    'scripts/ci/wrangler-config.mjs',
-    'scripts/lib/cloudflare.mjs',
-    'scripts/cf/clean-tmp.mjs',
-    'wrangler.jsonc',
-  ]) {
-    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-    fs.copyFileSync(path.join(ROOT, file), path.join(dir, file));
-  }
-  if (web) {
-    fs.mkdirSync(path.join(dir, 'dist', 'web'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'dist', 'web', 'index.html'), '<!doctype html>');
-  }
-  fs.mkdirSync(path.join(dir, 'bin'));
-  fs.writeFileSync(path.join(dir, 'bin', 'npx'), FAKE_NPX, { mode: 0o755 });
+  const file = 'scripts/ci/write-secrets-file.sh';
+  fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, file), path.join(dir, file));
   fs.mkdirSync(path.join(dir, 'elsewhere'));
   return dir;
 }
 
 /** Runs scripts/ci/<script> of a checkout from another folder, with only `env` (and PATH). */
 function run(dir, script, env = {}, args = []) {
-  const log = path.join(dir, 'npx.log');
-  fs.rmSync(log, { force: true });
   // stdin is not a socket (Node's pipes are), or bash would read the user's ~/.bashrc as for a remote shell.
   const result = spawnSync('bash', [path.join(dir, 'scripts', 'ci', script), ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: path.join(dir, 'elsewhere'),
-    env: {
-      PATH: [path.join(dir, 'bin'), path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
-      FAKE_NPX_LOG: log,
-      ...env,
-    },
+    env: { PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), ...env },
     encoding: 'utf8',
   });
-  const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
-  return { status: result.status, out: result.stdout + result.stderr, calls };
+  return { status: result.status, out: result.stdout + result.stderr };
 }
-
-const WRANGLER = ['--no', '--', 'wrangler', 'deploy'];
-const varArgs = (vars) => VARIABLES.filter((n) => n in vars).flatMap((n) => ['--var', `${n}:${vars[n]}`]);
 
 describe.skipIf(process.platform === 'win32')('scripts/ci/write-secrets-file.sh', () => {
   it('writes the secrets that are set to a new file of mode 0600 as JSON, and prints their names only', () => {
@@ -316,6 +252,18 @@ describe.skipIf(process.platform === 'win32')('scripts/ci/write-secrets-file.sh'
     for (const name of ['pwned', 'pwned2']) {
       expect(fs.existsSync(path.join(dir, 'elsewhere', name))).toBe(false);
     }
+  });
+
+  it('writes every name of SECRET_NAMES, which a secrets file of scripts/cf/wrangler.mjs may list, in that order', () => {
+    const dir = checkout();
+    const file = path.join(dir, 'secrets.json');
+    const secrets = Object.fromEntries(SECRET_NAMES.map((n) => [n, `secret-of-${n}-z9`]));
+    const { status, out } = run(dir, 'write-secrets-file.sh', { ...secrets, OTHER_SECRET: 'other-z9' }, [file]);
+    expect(status, out).toBe(0);
+    const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(written).toEqual(secrets);
+    expect(Object.keys(written)).toEqual(SECRET_NAMES);
+    expect(out).toBe(`Wrote ${SECRET_NAMES.join(', ')} to ${file}.\n`);
   });
 
   it('leaves out values of white space only, and writes {} when nothing is set', () => {
@@ -345,186 +293,5 @@ describe.skipIf(process.platform === 'win32')('scripts/ci/write-secrets-file.sh'
     const file = path.join(dir, 'secrets.json');
     expect(run(dir, 'write-secrets-file.sh', { RECOVERY_TOKEN: 'r'.repeat(40), SETUP_TOKEN: 'x' }, [file]).status).toBe(0);
     expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')))).toEqual(['SETUP_TOKEN']);
-  });
-});
-
-describe.skipIf(process.platform === 'win32')('scripts/ci/deploy-cloudflare.sh', () => {
-  it('a dry run: wrangler deploy --dry-run in the repository root, with the variables that are set and no secrets', () => {
-    const dir = checkout();
-    const secrets = path.join(dir, 'secrets.json');
-    fs.writeFileSync(secrets, JSON.stringify({ SETUP_TOKEN: 'setup-secret-k1' }));
-    const vars = { PUBLIC_URL: 'https://plan.example.com', INSTANCE_NAME: 'Plan', SIGNUP_POLICY: 'invite_only' };
-    const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', LYREN_PREBUILT: '1', SECRETS_FILE: secrets, ...vars });
-    expect(status, out).toBe(0);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args).toEqual([...WRANGLER, '--dry-run', '--outdir', 'dist/worker', ...varArgs(vars)]);
-    expect(calls[0].cwd).toBe(dir);
-    expect(calls[0].secretsFile).toBeNull();
-    expect(calls[0].env.LYREN_PREBUILT).toBe('1');
-    expect(out).toContain('Dry run: the Worker is bundled');
-    expect(out).toContain('Variables set (3): PUBLIC_URL INSTANCE_NAME SIGNUP_POLICY');
-    expect(out).toContain('Secrets: not read for a dry run');
-    expect(out).toContain('workers.dev: as wrangler.jsonc says (on; once a custom domain works, WORKERS_DEV=false keeps it off)');
-    expect(out).toContain('wrangler (fake): done');
-  });
-
-  it('a deploy with secrets: the file goes with the version, and nothing set is printed', () => {
-    const dir = checkout();
-    const file = path.join(dir, 'secrets.json');
-    const secrets = Object.fromEntries(SECRETS.map((n) => [n, `secret-of-${n}-z9`]));
-    expect(run(dir, 'write-secrets-file.sh', secrets, [file]).status).toBe(0);
-    const vars = Object.fromEntries(VARIABLES.map((n) => [n, `value-of-${n}-q7`]));
-    const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', {
-      CLOUDFLARE_API_TOKEN: 'cf-token-x3',
-      CLOUDFLARE_ACCOUNT_ID: 'cf-account-x4',
-      DRY_RUN: 'false',
-      LYREN_PREBUILT: '1',
-      SECRETS_FILE: file,
-      WORKER_NAME: 'lyren-test',
-      ...vars,
-    });
-    expect(status, out).toBe(0);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args).toEqual([...WRANGLER, '--name=lyren-test', ...varArgs(vars), `--secrets-file=${file}`]);
-    expect(JSON.parse(calls[0].secretsFile)).toEqual(secrets);
-    // Wrangler gets the token from its environment and no app secret there.
-    expect(calls[0].env).toMatchObject({ CLOUDFLARE_API_TOKEN: 'cf-token-x3', CLOUDFLARE_ACCOUNT_ID: 'cf-account-x4' });
-    for (const name of SECRETS) expect(calls[0].env[name]).toBeUndefined();
-    expect(out).toContain('Deploying to Cloudflare.');
-    expect(out).toContain('Worker name: from WORKER_NAME');
-    expect(out).toContain(`Variables set (${VARIABLES.length}): ${VARIABLES.join(' ')}`);
-    expect(out).toContain(`Secrets set (3): ${SECRETS.join(' ')}`);
-    for (const value of [...Object.values(vars), ...Object.values(secrets), 'cf-token-x3', 'cf-account-x4', 'lyren-test']) {
-      expect(out).not.toContain(value);
-    }
-  });
-
-  it('WORKERS_DEV=false: wrangler.deploy.jsonc with workers.dev off next to wrangler.jsonc, removed afterwards', () => {
-    const dir = checkout();
-    const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', WORKERS_DEV: 'false' });
-    expect(status, out).toBe(0);
-    expect(calls[0].args).toEqual([...WRANGLER, '--dry-run', '--outdir', 'dist/worker', '--config=wrangler.deploy.jsonc']);
-    const committed = parseJsonc(fs.readFileSync(path.join(dir, 'wrangler.jsonc'), 'utf8'));
-    expect(committed.workers_dev).toBe(true);
-    expect(parseJsonc(calls[0].config)).toEqual({ ...committed, workers_dev: false });
-    expect(fs.existsSync(path.join(dir, 'wrangler.deploy.jsonc'))).toBe(false);
-    expect(out).toContain('workers.dev: off (WORKERS_DEV=false)');
-    // Any other spelling of yes or no is no mistake; anything else is.
-    expect(run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'TRUE', WORKERS_DEV: ' Off ' }).calls[0].args).toContain('--config=wrangler.deploy.jsonc');
-    expect(run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', WORKERS_DEV: 'true' }).calls[0].args).not.toContain('--config=wrangler.deploy.jsonc');
-  });
-
-  it('MAIL_TRANSPORT=cloudflare or EMAIL_BINDING=true: wrangler.deploy.jsonc with the send_email binding EMAIL, removed afterwards', () => {
-    const dir = checkout();
-    const committed = parseJsonc(fs.readFileSync(path.join(dir, 'wrangler.jsonc'), 'utf8'));
-    expect(committed.send_email).toBeUndefined();
-    const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', MAIL_TRANSPORT: ' Cloudflare ' });
-    expect(status, out).toBe(0);
-    expect(calls[0].args).toEqual([...WRANGLER, '--dry-run', '--outdir', 'dist/worker', '--config=wrangler.deploy.jsonc', '--var', 'MAIL_TRANSPORT: Cloudflare ']);
-    expect(parseJsonc(calls[0].config)).toEqual({ ...committed, send_email: [{ name: 'EMAIL' }] });
-    expect(out).toContain('Email binding: EMAIL, for Cloudflare Email Service (MAIL_TRANSPORT=cloudflare)');
-    expect(fs.existsSync(path.join(dir, 'wrangler.deploy.jsonc'))).toBe(false);
-    // MAIL_TRANSPORT set in the dashboard instead: EMAIL_BINDING=true, here with workers.dev off as well.
-    const both = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', EMAIL_BINDING: 'yes', WORKERS_DEV: 'false' });
-    expect(both.status, both.out).toBe(0);
-    expect(both.calls[0].args).toEqual([...WRANGLER, '--dry-run', '--outdir', 'dist/worker', '--config=wrangler.deploy.jsonc']);
-    expect(parseJsonc(both.calls[0].config)).toEqual({ ...committed, workers_dev: false, send_email: [{ name: 'EMAIL' }] });
-    expect(both.out).toContain('Email binding: EMAIL, for Cloudflare Email Service (EMAIL_BINDING=true)');
-    expect(fs.existsSync(path.join(dir, 'wrangler.deploy.jsonc'))).toBe(false);
-    // Another transport, none, or EMAIL_BINDING=false: wrangler.jsonc as it is.
-    for (const env of [{ MAIL_TRANSPORT: 'smtp' }, {}, { EMAIL_BINDING: 'false' }]) {
-      const plain = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', ...env });
-      expect(plain.status, plain.out).toBe(0);
-      expect(plain.calls[0].args).not.toContain('--config=wrangler.deploy.jsonc');
-      expect(plain.out).toContain('Email binding: as wrangler.jsonc says');
-    }
-  });
-
-  it('drops empty values and values of white space, and passes others exactly as they are', () => {
-    const dir = checkout();
-    const vars = { PUBLIC_URL: '', INSTANCE_NAME: '  \t ', MAIL_FROM_NAME: ODD, SMTP_USER: ' padded ' };
-    const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', WORKER_NAME: ' ', SECRETS_FILE: '', ...vars });
-    expect(status, out).toBe(0);
-    expect(calls[0].args).toEqual([...WRANGLER, '--dry-run', '--outdir', 'dist/worker', '--var', `MAIL_FROM_NAME:${ODD}`, '--var', 'SMTP_USER: padded ']);
-    expect(out).toContain('Worker name: from wrangler.jsonc');
-    expect(out).toContain('Variables set (2): MAIL_FROM_NAME SMTP_USER');
-    expect(out).not.toContain('He said');
-    for (const name of ['pwned', 'pwned2']) {
-      expect(fs.existsSync(path.join(dir, 'elsewhere', name))).toBe(false);
-      expect(fs.existsSync(path.join(dir, name))).toBe(false);
-    }
-    // Nothing set at all is fine too: the Worker keeps what it has.
-    const bare = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true' });
-    expect(bare.calls[0].args).toEqual([...WRANGLER, '--dry-run', '--outdir', 'dist/worker']);
-    expect(bare.out).toContain('Variables set (0): none; the Worker keeps the ones it has');
-  });
-
-  it('a secret value with quotes, $( ), new lines and spaces reaches the file and Wrangler as it is', () => {
-    const dir = checkout();
-    const file = path.join(dir, 'secrets.json');
-    expect(run(dir, 'write-secrets-file.sh', { SMTP_PASS: ODD }, [file]).status).toBe(0);
-    const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', { SECRETS_FILE: file });
-    expect(status, out).toBe(0);
-    expect(calls[0].args).toEqual([...WRANGLER, `--secrets-file=${file}`]);
-    expect(JSON.parse(calls[0].secretsFile)).toEqual({ SMTP_PASS: ODD });
-    expect(out).not.toContain('He said');
-    expect(fs.existsSync(path.join(dir, 'elsewhere', 'pwned'))).toBe(false);
-  });
-
-  it('a secrets file that lists none: no --secrets-file, so the Worker keeps its secrets', () => {
-    const dir = checkout();
-    const file = path.join(dir, 'secrets.json');
-    expect(run(dir, 'write-secrets-file.sh', {}, [file]).status).toBe(0);
-    const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', { SECRETS_FILE: file });
-    expect(status, out).toBe(0);
-    expect(calls[0].args).toEqual(WRANGLER);
-    expect(out).toContain('Secrets: none set; the Worker keeps the ones it has');
-    expect(run(dir, 'deploy-cloudflare.sh', {}).out).toContain('Secrets: none set (no SECRETS_FILE)');
-  });
-
-  it('refuses before Wrangler runs: an unknown yes/no, a missing client or secrets file, RECOVERY_TOKEN or another name', () => {
-    const dir = checkout();
-    const refuse = (env, message) => {
-      const { status, out, calls } = run(dir, 'deploy-cloudflare.sh', env);
-      expect(status, out).toBe(1);
-      expect(out).toContain(message);
-      expect(calls).toEqual([]);
-      return out;
-    };
-    refuse({ DRY_RUN: 'maybe' }, 'DRY_RUN must be true or false');
-    refuse({ DRY_RUN: 'true', WORKERS_DEV: 'flase' }, 'WORKERS_DEV must be true or false');
-    refuse({ DRY_RUN: 'true', EMAIL_BINDING: 'maybe' }, 'EMAIL_BINDING must be true or false');
-    // The binding would be gone with this deploy, and every directory request would answer 503.
-    refuse({ DRY_RUN: 'true', MAIL_TRANSPORT: 'cloudflare', EMAIL_BINDING: 'off' }, 'MAIL_TRANSPORT=cloudflare sends through the send_email binding EMAIL');
-    refuse({ SECRETS_FILE: path.join(dir, 'none.json') }, 'SECRETS_FILE names no file');
-    const file = path.join(dir, 'odd.json');
-    fs.writeFileSync(file, JSON.stringify({ SETUP_TOKEN: 'setup-secret-k1', RECOVERY_TOKEN: 'recovery-secret-k2' }));
-    const out = refuse({ SECRETS_FILE: file }, 'lists RECOVERY_TOKEN, which no deploy sets');
-    expect(out).not.toMatch(/secret-k[12]/);
-    fs.writeFileSync(file, JSON.stringify({ SETUP_TOKEN: 'setup-secret-k1', OTHER: 'x' }));
-    refuse({ SECRETS_FILE: file }, 'lists "OTHER", which is not one of SETUP_TOKEN, SMTP_PASS, RESEND_API_KEY');
-    fs.writeFileSync(file, JSON.stringify({ SETUP_TOKEN: '' }));
-    refuse({ SECRETS_FILE: file }, 'has no value for SETUP_TOKEN');
-    fs.writeFileSync(file, '["setup-secret-k1"]');
-    expect(refuse({ SECRETS_FILE: file }, 'does not hold a JSON object')).not.toContain('secret-k1');
-    fs.writeFileSync(file, 'SETUP_TOKEN=setup-secret-k1');
-    expect(refuse({ SECRETS_FILE: file }, 'is not a JSON file')).not.toContain('secret-k1');
-    // LYREN_PREBUILT promises a built client: without one, wrangler.jsonc's build command would run Vite.
-    const unbuilt = checkout({ web: false });
-    const { status, out: why, calls } = run(unbuilt, 'deploy-cloudflare.sh', { DRY_RUN: 'true', LYREN_PREBUILT: '1' });
-    expect(status).toBe(1);
-    expect(why).toContain('LYREN_PREBUILT=1, but there is no dist/web/index.html');
-    expect(calls).toEqual([]);
-  });
-
-  it("ends with Wrangler's exit status, and removes wrangler.deploy.jsonc and an empty .wrangler/tmp anyway", () => {
-    const dir = checkout();
-    // What Wrangler leaves next to its configuration (Appendix D 40).
-    fs.mkdirSync(path.join(dir, '.wrangler', 'tmp'), { recursive: true });
-    const { status, calls } = run(dir, 'deploy-cloudflare.sh', { DRY_RUN: 'true', WORKERS_DEV: 'false', FAKE_NPX_EXIT: '3' });
-    expect(status).toBe(3);
-    expect(calls).toHaveLength(1);
-    expect(fs.existsSync(path.join(dir, 'wrangler.deploy.jsonc'))).toBe(false);
-    expect(fs.existsSync(path.join(dir, '.wrangler'))).toBe(false);
   });
 });

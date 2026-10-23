@@ -58,7 +58,7 @@ export class DirectoryDO extends DurableObject<Env> {
           db,
           config: config.directory,
           spaces: new DoSpaceAdminClient(env),
-          // SMTP over cloudflare:sockets; MAIL_TRANSPORT=cloudflare needs the deployer's EMAIL binding (§10.6).
+          // SMTP over cloudflare:sockets; MAIL_TRANSPORT=cloudflare needs the EMAIL binding its deploy adds (§10.6).
           mail: createMailTransport(config.directory.mail, { smtp: createCloudflareSmtpConnector(), email: env.EMAIL }),
           defer: (task) => {
             ctx.waitUntil(task.catch((err: unknown) => console.error('[lyren] A background task failed:', err)));

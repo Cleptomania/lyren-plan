@@ -1,8 +1,9 @@
 // The cloudflare transport (design §5.10.2, §10.6): Cloudflare Email Service through a send_email binding
 // named EMAIL, env.EMAIL.send({ from, to, subject, text, html, replyTo }). Workers Paid only, with the
-// sender's domain on Cloudflare; the deployer adds the binding to their own configuration (it is not in
-// the committed wrangler.jsonc). Without the binding the transport is a configuration error, so the
-// directory answers 503 with the reason instead of failing at the first message.
+// sender's domain on Cloudflare. MAIL_TRANSPORT=cloudflare in the instance configuration adds the binding
+// to each deploy (docs/cloudflare.md, "Your instance configuration"; it is not in the committed
+// wrangler.jsonc). Without the binding the transport is a configuration error, so the directory answers
+// 503 with the reason instead of failing at the first message.
 
 import { ConfigError, type MailFrom } from '../core/config';
 import { MailError, redact } from './errors';

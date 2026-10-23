@@ -19,7 +19,7 @@
 // the instance-settings seeds (§5.3) and warnings for the startup log and the admin overview.
 
 import { APP_NAME, SIGNUP_POLICIES, type SignupPolicy } from '@shared/constants';
-import { normalizeEmail } from './email';
+import { normalizeEmail } from '@shared/emailAddress';
 import type { RuntimeInfo } from './runtime';
 
 export type RuntimeKind = RuntimeInfo['kind'];
@@ -485,7 +485,8 @@ function mailConfig(vars: ConfigVars, runtime: RuntimeKind, url: URL | null, ins
     }
     return { ...mail, smtp: { host, port, security, user, pass, ehloName } };
   }
-  // cloudflare: the deployer adds the send_email binding EMAIL; the driver reports it when missing.
+  // cloudflare: the deploy of an instance configuration that sets it adds the send_email binding EMAIL; the driver
+  // reports it when missing.
   return mail;
 }
 
